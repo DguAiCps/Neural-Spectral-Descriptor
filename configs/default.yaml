@@ -1,0 +1,107 @@
+# Default Configuration for Neural Spectral Codec
+# Contains all system-wide parameters
+
+# Data settings
+data:
+  kitti_root: "/workspace/data/kitti/dataset"  # Path to KITTI dataset
+  sequences_train: [0, 1, 2, 3, 4, 5, 6, 7, 8]  # Training sequences
+  sequences_val: [9]  # Validation sequence
+  sequences_test: [10]  # Test sequences (if available)
+  lazy_load: true  # Lazy load point clouds to save memory
+  cache_dir: "data/preprocessed"  # Cache for preprocessed data
+
+# Encoding settings
+encoding:
+  # Projection type: 'range_image' or 'bev'
+  projection_type: 'range_image'
+
+  # Range image projection
+  n_elevation: 16  # Number of elevation rings (reduced for faster training)
+  n_azimuth: 360  # Number of azimuth bins (1-degree resolution)
+  elevation_range: [-24.8, 2.0]  # Min/max elevation in degrees
+  max_range: 80.0  # Maximum LiDAR range in meters
+  min_range: 1.0  # Minimum LiDAR range in meters
+
+  # BEV settings (used when projection_type='bev')
+  bev:
+    z_min: -3.0
+
+  # Sensor-agnostic binning (= n_rings for BEV)
+  target_elevation_bins: 16  # Target elevation bins for sensor compatibility (16-ring sensors)
+
+  # Spectral histogram
+  n_bins: 16  # Number of histogram bins
+  alpha: 2.0  # Exponential warping parameter (learned during training)
+  learnable_alpha: true  # Learn alpha during training
+  epsilon: 1.0e-8  # Numerical stability constant
+  bin_statistics: ['sum']  # Per-bin statistics: sum, mean, std, max, min
+
+  # Quantization
+  quantization_bits: 16  # Bits per bin (uint16)
+  descriptor_size: 152  # Total descriptor size in bytes
+
+# Keyframe selection settings
+keyframe:
+  distance_threshold: 0.5  # Minimum translation in meters
+  rotation_threshold: 15.0  # Minimum rotation in degrees
+  overlap_threshold: 0.7  # Maximum IoU for geometric novelty
+  temporal_threshold: 5.0  # Minimum time difference in seconds
+  voxel_size: 0.2  # Voxel size for overlap computation in meters
+  max_keyframes: 100000  # Maximum keyframes to store
+
+  # Graph settings
+  temporal_neighbors: 5  # M=5 temporal neighbors (past/future)
+  max_active_nodes: 1000  # Sliding window size
+  freeze_old_embeddings: true  # Freeze embeddings beyond window
+
+# GNN settings
+gnn:
+  # Architecture
+  # Per-elevation histogram: target_elevation_bins × n_bins = 16 × 16 = 256D
+  input_dim: 256  # Input dimension (per-elevation histogram)
+  hidden_dim: 256  # Hidden dimension
+  output_dim: 256  # Output dimension
+  n_layers: 3  # Number of GATConv layers
+  n_heads: 1  # Number of attention heads per layer
+  dropout: 0.1  # Dropout rate
+  residual: true  # Use residual connections
+
+  # Local updates (efficiency optimization)
+  local_update_hops: 3  # Only update 3-hop neighborhood (~31 nodes)
+  use_local_updates: true  # Enable local updates for scalability
+
+  # Multi-GPU and early stopping
+  use_multi_gpu: true  # Use multiple GPUs if available
+  patience: 10  # Early stopping patience (epochs without improvement)
+
+# Retrieval settings
+retrieval:
+  # Stage 1: Global retrieval
+  top_k: 10  # Number of candidates from global retrieval
+  spatial_filter_distance: 50.0  # Spatial filtering >50m
+  context_window: 10  # Last 10 keyframes for context injection
+  use_wasserstein: true  # Use Wasserstein distance
+
+  # Stage 2: Geometric verification
+  verification_method: "gicp"  # ICP method (icp, gicp)
+  icp_fitness_threshold: 0.3  # Minimum fitness score
+  icp_rmse_threshold: 0.5  # Maximum RMSE in meters
+  icp_max_iterations: 30  # Maximum ICP iterations
+  voxel_downsample: 0.3  # Voxel size for downsampling before ICP
+
+# System settings
+system:
+  device: "cuda"  # Device (cpu, cuda, cuda:0, etc.)
+  num_workers: 4  # Number of data loading workers
+  seed: 42  # Random seed for reproducibility
+  output_dir: "outputs"  # Output directory
+  log_dir: "logs"  # Log directory
+  checkpoint_dir: "checkpoints"  # Checkpoint directory
+
+# Logging settings
+logging:
+  use_wandb: false  # Use Weights & Biases logging
+  wandb_project: "neural-spectral-codec"  # W&B project name
+  wandb_entity: null  # W&B entity (username/team)
+  log_interval: 10  # Log every N iterations
+  save_interval: 1000  # Save checkpoint every N iterations

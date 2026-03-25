@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Training outputs
+logs/
+outputs/
+checkpoints/
+**/checkpoints/
+**/checkpoints_v2/
+docs/
+*.pth
+*.pt
+
+# Data
+data/
+*.bin
+*.h5
+*.hdf5
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+*.tmp
+*.temp
+.claude/
+
+# Project-specific
+CLAUDE.md
