@@ -150,8 +150,16 @@ def get_elevation_range(config, dataset_type):
     return tuple(config['encoding']['elevation_range'])
 
 
-def compute_cache_key(config):
-    """Compute SHA256 hash from encoding + keyframe config for cache invalidation"""
+def compute_cache_key(config, dataset_type=None):
+    """
+    Compute SHA256 hash from encoding + keyframe config for cache invalidation.
+
+    For range_image mode the key is per-dataset: it includes only the elevation
+    range of the given `dataset_type` (not the whole sensor_elevation_ranges
+    dict), so adding a new sensor does not invalidate unrelated caches.
+
+    For bev mode the key is dataset-agnostic (sensor-independent projection).
+    """
     enc = config['encoding']
     kf = config['keyframe']
     projection_type = enc.get('projection_type', 'range_image')
@@ -167,24 +175,35 @@ def compute_cache_key(config):
         'zero_center': enc.get('zero_center', False),
         'log_magnitude': enc.get('log_magnitude', False),
         'normalize_channels': enc.get('normalize_channels', True),
+        'spectral_policy_enabled': enc.get('spectral_policy', {}).get('enabled', False),
+    }
+    # Alpha affects bin edges for exponential strategy (octave ignores it)
+    if key_params['binning_strategy'] != 'octave':
+        key_params['alpha'] = enc.get('alpha', 2.0)
+    key_params.update({
         'distance_threshold': kf['distance_threshold'],
         'rotation_threshold': kf['rotation_threshold'],
         'overlap_threshold': kf['overlap_threshold'],
         'temporal_threshold': kf['temporal_threshold'],
-    }
+    })
     if projection_type == 'bev':
         key_params['bev'] = enc.get('bev', {})
     else:
-        # Range image: elevation params affect output
+        # Range image: include only the elevation range actually used for this
+        # dataset. Fall back to the global default if no dataset_type given.
         key_params['n_elevation'] = enc['n_elevation']
-        key_params['elevation_range'] = enc['elevation_range']
-        key_params['sensor_elevation_ranges'] = enc.get('sensor_elevation_ranges', {})
         key_params['target_elevation_bins'] = enc['target_elevation_bins']
+        if dataset_type is not None:
+            key_params['dataset_type'] = dataset_type
+            key_params['elevation_range'] = list(get_elevation_range(config, dataset_type))
+        else:
+            key_params['elevation_range'] = enc['elevation_range']
     return hashlib.sha256(json.dumps(key_params, sort_keys=True).encode()).hexdigest()[:8]
 
 
-def get_cache_path(cache_dir, cache_key, dataset_name):
-    """Get cache file path for a dataset"""
+def get_cache_path(cache_dir, config, dataset_type, dataset_name):
+    """Get cache file path for a dataset using a per-dataset cache key."""
+    cache_key = compute_cache_key(config, dataset_type=dataset_type)
     return Path(cache_dir) / f"cache_{cache_key}_{dataset_name}.npz"
 
 
@@ -212,6 +231,10 @@ def save_keyframes_cache(path, keyframes):
     if keyframes[0].spectral_entropy is not None:
         entropies = np.array([kf.spectral_entropy for kf in keyframes])
         save_dict['spectral_entropies'] = entropies
+    # Save FFT magnitudes for spectral policy (if computed)
+    if keyframes[0].fft_magnitudes is not None:
+        fft_mags = np.array([kf.fft_magnitudes for kf in keyframes])
+        save_dict['fft_magnitudes'] = fft_mags
     np.savez(path, **save_dict)
     logging.info(f"  Saved cache: {path} ({len(keyframes)} keyframes)")
 
@@ -227,6 +250,7 @@ def load_keyframes_cache(path):
         scan_ids = data['scan_ids']
         keyframe_ids = data['keyframe_ids']
         entropies = data['spectral_entropies'] if 'spectral_entropies' in data else None
+        fft_mags = data['fft_magnitudes'] if 'fft_magnitudes' in data else None
 
         keyframes = []
         for i in range(len(scan_ids)):
@@ -238,12 +262,14 @@ def load_keyframes_cache(path):
                 timestamp=float(timestamps[i]),
                 descriptor=descriptors[i],
                 spectral_entropy=float(entropies[i]) if entropies is not None else None,
+                fft_magnitudes=fft_mags[i] if fft_mags is not None else None,
             )
             keyframes.append(kf)
         return keyframes
 
 
-def process_dataset(loader, encoder, keyframe_selector, device, max_scans=None, dataset_name=""):
+def process_dataset(loader, encoder, keyframe_selector, device, max_scans=None, dataset_name="",
+                    compute_fft_magnitudes=False):
     """Process dataset and extract keyframes with profiling"""
     keyframes = []
     num_scans = len(loader) if max_scans is None else min(len(loader), max_scans)
@@ -293,6 +319,10 @@ def process_dataset(loader, encoder, keyframe_selector, device, max_scans=None, 
                 keyframe.descriptor = descriptor
                 keyframe.spectral_entropy = entropy
 
+                # Compute FFT magnitudes for spectral policy (before discarding points)
+                if compute_fft_magnitudes:
+                    keyframe.fft_magnitudes = encoder.compute_fft_magnitudes(data['points'])
+
                 # Memory optimization: Discard point cloud after encoding
                 # Points are only needed for encoding, not for GNN training
                 keyframe.points = np.empty((0, 3), dtype=np.float32)
@@ -333,11 +363,27 @@ def main():
                         help='Path to config file')
     parser.add_argument('--checkpoint-dir', type=str, default='src/checkpoints',
                         help='Directory to save checkpoints')
+    parser.add_argument('--validate-only', action='store_true',
+                        help='Load best_model.pth and run validation only (no training)')
+    parser.add_argument('--dump-per-query-dir', type=str, default=None,
+                        help='Directory for per-query JSON dumps (validate-only mode)')
+    parser.add_argument('--seed', type=int, default=None,
+                        help='Random seed for numpy/torch/cuda (default: nondeterministic)')
     args = parser.parse_args()
 
     # Setup
     start_time = time.perf_counter()
     logger, log_file = setup_logging('logs')
+
+    # Reproducibility: seed all RNGs.
+    if args.seed is not None:
+        import random as _py_random
+        _py_random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(args.seed)
+        logging.info(f"Random seed set to {args.seed} (numpy/torch/cuda)")
 
     # Route uncaught exceptions to log file
     def _excepthook(exc_type, exc_value, exc_tb):
@@ -412,6 +458,10 @@ def main():
     logging.info(f"  Encoder created (projection={projection_type}, n_bins={config['encoding']['n_bins']}, "
                  f"bin_statistics={bin_statistics}, output_dim={encoder.output_dim})")
 
+    # Check if spectral policy is enabled (need FFT magnitudes in cache)
+    policy_config = config['encoding'].get('spectral_policy', {})
+    need_fft_magnitudes = policy_config.get('enabled', False)
+
     # Create keyframe selector
     from keyframe.selector import KeyframeSelector
     keyframe_selector = KeyframeSelector(
@@ -421,11 +471,10 @@ def main():
         temporal_threshold=config['keyframe']['temporal_threshold']
     )
 
-    # Descriptor cache setup
+    # Descriptor cache setup — per-dataset keys are computed inside each loop
     cache_dir = config['data'].get('cache_dir', 'data/preprocessed')
     os.makedirs(cache_dir, exist_ok=True)
-    cache_key = compute_cache_key(config)
-    logging.info(f"  Cache dir: {cache_dir}, key: {cache_key}")
+    logging.info(f"  Cache dir: {cache_dir} (per-dataset cache keys)")
 
     # ========================================================================
     # Stage 2: Load Training Data
@@ -455,7 +504,7 @@ def main():
                 from data.kitti_loader import KITTILoader
                 for seq in sequences:
                     ds_name = f"kitti_{seq}"
-                    cache_path = get_cache_path(cache_dir, cache_key, ds_name)
+                    cache_path = get_cache_path(cache_dir, config, dataset_type, ds_name)
                     if cache_path.exists():
                         keyframes = load_keyframes_cache(cache_path)
                         logging.info(f"    Loaded from cache: {len(keyframes)} keyframes ({ds_name})")
@@ -464,14 +513,14 @@ def main():
                         loader = KITTILoader(root, seq, lazy_load=True)
                         keyframes = process_dataset(
                             loader, encoder, keyframe_selector, device,
-                            dataset_name=ds_name
+                            dataset_name=ds_name,
+                            compute_fft_magnitudes=need_fft_magnitudes
                         )
                         save_keyframes_cache(cache_path, keyframes)
                         del loader  # Free loader memory
                     all_train_keyframes.extend(keyframes)
                     train_sequence_ids.extend([current_seq_id] * len(keyframes))
                     del keyframes  # Free temporary keyframes list
-                    gc.collect()  # Force garbage collection
                     mem_mb = get_memory_usage_mb()
                     logging.info(f"    Sequence {seq}: seq_id={current_seq_id}, total_keyframes={len(all_train_keyframes)}, RAM={mem_mb:.0f}MB")
                     current_seq_id += 1
@@ -480,7 +529,7 @@ def main():
                 from data.nclt_loader import NCLTLoader
                 for date in sequences:
                     ds_name = f"nclt_{date}"
-                    cache_path = get_cache_path(cache_dir, cache_key, ds_name)
+                    cache_path = get_cache_path(cache_dir, config, dataset_type, ds_name)
                     if cache_path.exists():
                         keyframes = load_keyframes_cache(cache_path)
                         logging.info(f"    Loaded from cache: {len(keyframes)} keyframes ({ds_name})")
@@ -489,14 +538,14 @@ def main():
                         loader = NCLTLoader(root, date, lazy_load=True)
                         keyframes = process_dataset(
                             loader, encoder, keyframe_selector, device,
-                            dataset_name=ds_name
+                            dataset_name=ds_name,
+                            compute_fft_magnitudes=need_fft_magnitudes
                         )
                         save_keyframes_cache(cache_path, keyframes)
                         del loader  # Free loader memory
                     all_train_keyframes.extend(keyframes)
                     train_sequence_ids.extend([current_seq_id] * len(keyframes))
                     del keyframes  # Free temporary keyframes list
-                    gc.collect()  # Force garbage collection
                     mem_mb = get_memory_usage_mb()
                     logging.info(f"    Date {date}: seq_id={current_seq_id}, total_keyframes={len(all_train_keyframes)}, RAM={mem_mb:.0f}MB")
                     current_seq_id += 1
@@ -505,7 +554,7 @@ def main():
                 from data.helipr_loader import HeLiPRLoader
                 for seq in sequences:
                     ds_name = f"helipr_{seq}"
-                    cache_path = get_cache_path(cache_dir, cache_key, ds_name)
+                    cache_path = get_cache_path(cache_dir, config, dataset_type, ds_name)
                     if cache_path.exists():
                         keyframes = load_keyframes_cache(cache_path)
                         logging.info(f"    Loaded from cache: {len(keyframes)} keyframes ({ds_name})")
@@ -516,7 +565,8 @@ def main():
                             loader = HeLiPRLoader(seq_path, lazy_load=True)
                             keyframes = process_dataset(
                                 loader, encoder, keyframe_selector, device,
-                                dataset_name=ds_name
+                                dataset_name=ds_name,
+                                compute_fft_magnitudes=need_fft_magnitudes
                             )
                             save_keyframes_cache(cache_path, keyframes)
                             del loader  # Free loader memory
@@ -527,10 +577,42 @@ def main():
                     all_train_keyframes.extend(keyframes)
                     train_sequence_ids.extend([current_seq_id] * len(keyframes))
                     del keyframes  # Free temporary keyframes list
-                    gc.collect()  # Force garbage collection
                     mem_mb = get_memory_usage_mb()
                     logging.info(f"    Sequence {seq}: seq_id={current_seq_id}, total_keyframes={len(all_train_keyframes)}, RAM={mem_mb:.0f}MB")
                     current_seq_id += 1
+
+            elif dataset_type == 'mulran':
+                from data.mulran_loader import MulRanLoader
+                for seq in sequences:
+                    ds_name = f"mulran_{seq}"
+                    cache_path = get_cache_path(cache_dir, config, dataset_type, ds_name)
+                    if cache_path.exists():
+                        keyframes = load_keyframes_cache(cache_path)
+                        logging.info(f"    Loaded from cache: {len(keyframes)} keyframes ({ds_name})")
+                    else:
+                        keyframe_selector.reset()
+                        try:
+                            loader = MulRanLoader(root, seq, lazy_load=True)
+                            keyframes = process_dataset(
+                                loader, encoder, keyframe_selector, device,
+                                dataset_name=ds_name,
+                                compute_fft_magnitudes=need_fft_magnitudes
+                            )
+                            save_keyframes_cache(cache_path, keyframes)
+                            del loader  # Free loader memory
+                        except Exception as e:
+                            logging.warning(f"    Failed to load MulRan {seq}: {e}")
+                            current_seq_id += 1
+                            continue
+                    all_train_keyframes.extend(keyframes)
+                    train_sequence_ids.extend([current_seq_id] * len(keyframes))
+                    del keyframes  # Free temporary keyframes list
+                    mem_mb = get_memory_usage_mb()
+                    logging.info(f"    Sequence {seq}: seq_id={current_seq_id}, total_keyframes={len(all_train_keyframes)}, RAM={mem_mb:.0f}MB")
+                    current_seq_id += 1
+
+    # Opt 8: Single gc.collect() after all training data loaded (not per-sequence)
+    gc.collect()
 
     train_sequence_ids = np.array(train_sequence_ids)
     logging.info(f"Total training keyframes: {len(all_train_keyframes)} across {current_seq_id} sequences")
@@ -561,7 +643,7 @@ def main():
                 from data.kitti_loader import KITTILoader
                 for seq in sequences:
                     ds_name = f"kitti_val_{seq}"
-                    cache_path = get_cache_path(cache_dir, cache_key, ds_name)
+                    cache_path = get_cache_path(cache_dir, config, dataset_type, ds_name)
                     if cache_path.exists():
                         keyframes = load_keyframes_cache(cache_path)
                         logging.info(f"    Loaded from cache: {len(keyframes)} keyframes ({ds_name})")
@@ -570,7 +652,8 @@ def main():
                         loader = KITTILoader(root, seq, lazy_load=True)
                         keyframes = process_dataset(
                             loader, encoder, keyframe_selector, device,
-                            dataset_name=ds_name
+                            dataset_name=ds_name,
+                            compute_fft_magnitudes=need_fft_magnitudes
                         )
                         save_keyframes_cache(cache_path, keyframes)
                     dataset_name = f"KITTI_{seq}"
@@ -581,7 +664,7 @@ def main():
                 from data.nclt_loader import NCLTLoader
                 for date in sequences:
                     ds_name = f"nclt_val_{date}"
-                    cache_path = get_cache_path(cache_dir, cache_key, ds_name)
+                    cache_path = get_cache_path(cache_dir, config, dataset_type, ds_name)
                     if cache_path.exists():
                         keyframes = load_keyframes_cache(cache_path)
                         logging.info(f"    Loaded from cache: {len(keyframes)} keyframes ({ds_name})")
@@ -590,7 +673,8 @@ def main():
                         loader = NCLTLoader(root, date, lazy_load=True)
                         keyframes = process_dataset(
                             loader, encoder, keyframe_selector, device,
-                            dataset_name=ds_name
+                            dataset_name=ds_name,
+                            compute_fft_magnitudes=need_fft_magnitudes
                         )
                         save_keyframes_cache(cache_path, keyframes)
                     dataset_name = f"NCLT_{date}"
@@ -601,7 +685,7 @@ def main():
                 from data.helipr_loader import HeLiPRLoader
                 for seq in sequences:
                     ds_name = f"helipr_val_{seq}"
-                    cache_path = get_cache_path(cache_dir, cache_key, ds_name)
+                    cache_path = get_cache_path(cache_dir, config, dataset_type, ds_name)
                     if cache_path.exists():
                         keyframes = load_keyframes_cache(cache_path)
                         logging.info(f"    Loaded from cache: {len(keyframes)} keyframes ({ds_name})")
@@ -612,13 +696,39 @@ def main():
                             loader = HeLiPRLoader(seq_path, lazy_load=True)
                             keyframes = process_dataset(
                                 loader, encoder, keyframe_selector, device,
-                                dataset_name=ds_name
+                                dataset_name=ds_name,
+                                compute_fft_magnitudes=need_fft_magnitudes
                             )
                             save_keyframes_cache(cache_path, keyframes)
                         except Exception as e:
                             logging.warning(f"  Failed to load HeLiPR {seq}: {e}")
                             continue
                     dataset_name = f"HeLiPR_{seq}"
+                    val_datasets_info[dataset_name] = {'keyframes': keyframes}
+                    logging.info(f"  Validation {dataset_name}: {len(keyframes)} keyframes")
+
+            elif dataset_type == 'mulran':
+                from data.mulran_loader import MulRanLoader
+                for seq in sequences:
+                    ds_name = f"mulran_val_{seq}"
+                    cache_path = get_cache_path(cache_dir, config, dataset_type, ds_name)
+                    if cache_path.exists():
+                        keyframes = load_keyframes_cache(cache_path)
+                        logging.info(f"    Loaded from cache: {len(keyframes)} keyframes ({ds_name})")
+                    else:
+                        keyframe_selector.reset()
+                        try:
+                            loader = MulRanLoader(root, seq, lazy_load=True)
+                            keyframes = process_dataset(
+                                loader, encoder, keyframe_selector, device,
+                                dataset_name=ds_name,
+                                compute_fft_magnitudes=need_fft_magnitudes
+                            )
+                            save_keyframes_cache(cache_path, keyframes)
+                        except Exception as e:
+                            logging.warning(f"  Failed to load MulRan {seq}: {e}")
+                            continue
+                    dataset_name = f"MulRan_{seq}"
                     val_datasets_info[dataset_name] = {'keyframes': keyframes}
                     logging.info(f"  Validation {dataset_name}: {len(keyframes)} keyframes")
 
@@ -688,18 +798,49 @@ def main():
             standardization_stats = StandardizationStats().fit(train_descriptors)
             standardization_stats.save(std_cache_path)
 
+    # Ground-truth pose-based similarity edges (train only). When enabled,
+    # select same-place pairs via pose distance during initial graph build —
+    # perfectly clean supervision edges for the GNN. Val/test graphs stay
+    # temporal-only (realistic inference). Mutually exclusive with two_pass.
+    use_pose_gt_edges = bool(graph_config.get('use_pose_gt_edges', False))
+    pose_gt_edge_max_k = int(graph_config.get('pose_gt_edge_max_k', 10))
+    if use_pose_gt_edges:
+        logging.info(
+            f"  Pose-GT similarity edges enabled (train only): "
+            f"pos_dist={config.get('triplet', {}).get('positive_distance_max', 5.0)}m, "
+            f"min_temporal_gap={config.get('triplet', {}).get('min_temporal_distance', 30)}, "
+            f"max_k={pose_gt_edge_max_k}"
+        )
+
+    # Two-pass similarity edge refinement: when enabled, skip initial Bayesian
+    # fitting on raw descriptors (structurally impossible, see plan) and build
+    # the initial graph with temporal edges only. The GNN will periodically
+    # refit on its own ctx embeddings during training.
+    two_pass_cfg = graph_config.get('two_pass', {})
+    two_pass_enabled = bool(two_pass_cfg.get('enabled', False)) and not use_pose_gt_edges
+    if use_pose_gt_edges and bool(two_pass_cfg.get('enabled', False)):
+        logging.info("  (two_pass disabled: superseded by use_pose_gt_edges)")
+    if two_pass_enabled:
+        logging.info(
+            f"  Two-pass refinement enabled: warmup={two_pass_cfg.get('warmup_epochs', 10)} ep, "
+            f"refine_every={two_pass_cfg.get('refine_every', 5)} ep, "
+            f"refine_space='{two_pass_cfg.get('refine_space', 'ctx')}' "
+            f"-> skipping initial similarity_dist fit"
+        )
+
     # Bayesian edge selection: fit similarity distribution from training data
     edge_method = graph_config.get('edge_method', 'threshold')
     similarity_dist = None
-    if edge_method == 'bayesian':
-        from utils.similarity_stats import SimilarityDistribution
+    # Bayesian config is always constructed (also used by two-pass refinement)
+    bayesian_config = {
+        'confidence_level': graph_config.get('confidence_level', 0.95),
+        'base_prior': graph_config.get('base_prior', 0.01),
+        'density_k': graph_config.get('density_k', 50),
+        'density_beta': graph_config.get('density_beta', 10.0),
+    } if edge_method == 'bayesian' else {}
 
-        bayesian_config = {
-            'confidence_level': graph_config.get('confidence_level', 0.95),
-            'base_prior': graph_config.get('base_prior', 0.01),
-            'density_k': graph_config.get('density_k', 50),
-            'density_beta': graph_config.get('density_beta', 10.0),
-        }
+    if edge_method == 'bayesian' and not two_pass_enabled and not use_pose_gt_edges:
+        from utils.similarity_stats import SimilarityDistribution
 
         dist_cache_path = os.path.join(checkpoint_dir, 'similarity_dist.npz')
         if os.path.exists(dist_cache_path):
@@ -718,6 +859,7 @@ def main():
                 pos_dist=triplet_cfg.get('positive_distance_max', 5.0),
                 neg_dist=triplet_cfg.get('negative_distance_min', 10.0),
                 min_temporal_gap=triplet_cfg.get('min_temporal_distance', 30),
+                n_samples=graph_config.get('n_samples', 100000),
             )
             if similarity_dist.fitted:
                 similarity_dist.save(dist_cache_path)
@@ -729,8 +871,13 @@ def main():
         logging.info(f"  Edge method: {edge_method}, metric: {similarity_metric}, "
                      f"prior_signal: {prior_signal}, "
                      f"confidence: {bayesian_config['confidence_level']}")
+    elif edge_method == 'bayesian' and two_pass_enabled:
+        logging.info(f"  Edge method: {edge_method} (two-pass), metric: {similarity_metric}, "
+                     f"prior_signal: {prior_signal}, "
+                     f"confidence: {bayesian_config['confidence_level']} (applied during training)")
+    elif use_pose_gt_edges:
+        logging.info(f"  Edge method: pose-GT (train only), metric: {similarity_metric}")
     else:
-        bayesian_config = {}
         logging.info(f"  Edge method: threshold ({similarity_threshold}), metric: {similarity_metric}")
 
     # Extract spectral entropies if using entropy-based prior
@@ -746,13 +893,17 @@ def main():
 
     train_entropies = _extract_entropies(all_train_keyframes)
 
+    # Under two-pass mode OR pose-GT edges mode, the initial graph holds only
+    # temporal edges. Similarity edges are attached afterward (pose-GT) or
+    # during training via the refinement hook (two-pass).
+    initial_descriptors = None if (two_pass_enabled or use_pose_gt_edges) else train_descriptors
     with profiler.profile('build_train_graph'):
         train_graph = build_graph_from_keyframes_batch(
             all_train_keyframes,
             temporal_neighbors=config['keyframe']['temporal_neighbors'],
             device=device,
             poses=train_poses,
-            descriptors=train_descriptors,
+            descriptors=initial_descriptors,
             similarity_threshold=similarity_threshold,
             similarity_max_k=similarity_max_k,
             similarity_exclude_temporal=similarity_exclude_temporal,
@@ -765,6 +916,28 @@ def main():
             standardization_stats=standardization_stats,
             **bayesian_config,
         )
+    # Attach ground-truth pose-based similarity edges (train only).
+    if use_pose_gt_edges:
+        from keyframe.graph_manager import attach_pose_gt_similarity_edges
+        triplet_cfg = config.get('triplet', {})
+        with profiler.profile('attach_pose_gt_edges'):
+            train_graph, n_pose_gt = attach_pose_gt_similarity_edges(
+                train_graph,
+                train_poses,
+                train_descriptors,
+                sequence_ids=train_sequence_ids,
+                pos_dist=triplet_cfg.get('positive_distance_max', 5.0),
+                min_temporal_gap=triplet_cfg.get('min_temporal_distance', 30),
+                similarity_max_k=pose_gt_edge_max_k,
+            )
+        logging.info(f"  Pose-GT similarity edges attached: {n_pose_gt:,}")
+
+    # Attach FFT magnitudes to graph for spectral policy
+    if need_fft_magnitudes:
+        fft_mags = np.array([kf.fft_magnitudes for kf in all_train_keyframes])
+        train_graph.x_fft = torch.from_numpy(fft_mags.reshape(len(fft_mags), -1)).float().to(device)
+        logging.info(f"  Attached x_fft: {train_graph.x_fft.shape} ({train_graph.x_fft.nbytes / 1e6:.1f} MB)")
+
     train_graph_time = profiler.get_stats('build_train_graph')['total']
     has_edge_attr = train_graph.edge_attr is not None
     n_temporal = int((train_graph.edge_type == 0).sum()) if hasattr(train_graph, 'edge_type') else 0
@@ -783,12 +956,16 @@ def main():
             poses = np.array([kf.pose for kf in keyframes])
             val_descs = np.array([kf.descriptor for kf in keyframes])
             val_entropies = _extract_entropies(keyframes)
+            # Two-pass mode OR pose-GT mode: build graph with temporal edges only
+            # initially. Pose-GT edges attached afterward below; two-pass refines
+            # during training via validate() hook.
+            val_initial_descriptors = None if (two_pass_enabled or use_pose_gt_edges) else val_descs
             graph = build_graph_from_keyframes_batch(
                 keyframes,
                 temporal_neighbors=config['keyframe']['temporal_neighbors'],
                 device=device,
                 poses=poses,
-                descriptors=val_descs,
+                descriptors=val_initial_descriptors,
                 similarity_threshold=similarity_threshold,
                 similarity_max_k=similarity_max_k,
                 similarity_exclude_temporal=similarity_exclude_temporal,
@@ -801,8 +978,25 @@ def main():
                 standardization_stats=standardization_stats,
                 **bayesian_config,
             )
+            # Attach pose-GT similarity edges to val graph for upper-bound
+            # experiment (train/val structural symmetry). Each val graph holds
+            # a single sequence, so no sequence_ids needed.
+            if use_pose_gt_edges:
+                from keyframe.graph_manager import attach_pose_gt_similarity_edges
+                triplet_cfg = config.get('triplet', {})
+                graph, n_val_pose_gt = attach_pose_gt_similarity_edges(
+                    graph, poses, val_descs,
+                    sequence_ids=None,  # single sequence per val graph
+                    pos_dist=triplet_cfg.get('positive_distance_max', 5.0),
+                    min_temporal_gap=triplet_cfg.get('min_temporal_distance', 30),
+                    similarity_max_k=pose_gt_edge_max_k,
+                )
             info['poses'] = poses
             info['graph'] = graph
+            # Attach FFT magnitudes for spectral policy
+            if need_fft_magnitudes:
+                val_fft = np.array([kf.fft_magnitudes for kf in keyframes])
+                graph.x_fft = torch.from_numpy(val_fft.reshape(len(val_fft), -1)).float().to(device)
             vt = int((graph.edge_type == 0).sum()) if hasattr(graph, 'edge_type') else 0
             vs = int((graph.edge_type == 1).sum()) if hasattr(graph, 'edge_type') else 0
             logging.info(
@@ -820,6 +1014,21 @@ def main():
 
     edge_enc_config = config['gnn'].get('edge_encoding', None)
 
+    # Create spectral policy if enabled
+    spectral_policy = None
+    if need_fft_magnitudes:
+        from encoding.spectral_policy import create_spectral_policy
+        # Determine n_rings and n_freqs from the cached FFT magnitudes
+        sample_fft = all_train_keyframes[0].fft_magnitudes
+        n_rings_fft, n_freqs_fft = sample_fft.shape
+        spectral_policy = create_spectral_policy(
+            policy_config, n_rings=n_rings_fft, n_freqs=n_freqs_fft
+        )
+        logging.info(f"  Spectral policy: {policy_config.get('type', 'soft_binning')} "
+                     f"(n_rings={n_rings_fft}, n_freqs={n_freqs_fft}, "
+                     f"output_dim={spectral_policy.output_dim}, "
+                     f"params={sum(p.numel() for p in spectral_policy.parameters()):,})")
+
     with profiler.profile('create_gnn'):
         gnn = create_spectral_gnn(
             input_dim=config['gnn']['input_dim'],
@@ -828,8 +1037,18 @@ def main():
             n_layers=config['gnn']['n_layers'],
             n_heads=config['gnn'].get('n_heads', 4),
             dropout=config['gnn']['dropout'],
-            edge_encoder_config=edge_enc_config
+            edge_encoder_config=edge_enc_config,
+            spectral_policy=spectral_policy,
+            norm_type=config['gnn'].get('norm_type', 'batch_norm'),
+            use_residual_gate=config['gnn'].get('use_residual_gate', False),
+            gate_hidden_dim=config['gnn'].get('gate_hidden_dim', 64),
+            use_edge_confidence_gate=config['gnn'].get('use_edge_confidence_gate', False),
+            edge_gate_hidden_dim=config['gnn'].get('edge_gate_hidden_dim', 16),
         ).to(device)
+
+    # Get effective input_dim (may differ from config if policy overrides it)
+    base_gnn = gnn.gnn if hasattr(gnn, 'gnn') else gnn
+    effective_input_dim = base_gnn.input_dim
 
     n_params = sum(p.numel() for p in gnn.parameters() if p.requires_grad)
     logging.info(f"  GNN parameters: {n_params:,}")
@@ -838,12 +1057,13 @@ def main():
                  f"{config['gnn']['n_layers']} layers, "
                  f"{config['gnn']['hidden_dim']} hidden, {config['gnn']['context_dim']} context, "
                  f"{config['gnn'].get('n_heads', 4)} heads")
-    logging.info(f"  Output: cat(raw_{config['gnn']['input_dim']}, context_{config['gnn']['context_dim']}) = "
-                 f"{config['gnn']['input_dim'] + config['gnn']['context_dim']}D")
+    logging.info(f"  Output: cat(raw_{effective_input_dim}, context_{config['gnn']['context_dim']}) = "
+                 f"{effective_input_dim + config['gnn']['context_dim']}D")
 
     # Create trainer
     from gnn.trainer import GNNTrainer
 
+    smoothap_cfg = config['training'].get('smoothap', {})
     trainer = GNNTrainer(
         model=gnn,
         device=device,
@@ -853,54 +1073,124 @@ def main():
         checkpoint_dir=checkpoint_dir,
         patience=config['gnn']['patience'],
         use_multi_gpu=False,
-        use_amp=config['training'].get('use_amp', True)  # Mixed precision (default: True)
+        use_amp=config['training'].get('use_amp', True),
+        policy_lr_scale=policy_config.get('lr_scale', 1.0),
+        policy_warmup_epochs=policy_config.get('warmup_epochs', 0),
+        loss_type=config['training'].get('loss_type', 'infonce'),
+        smoothap_tau=smoothap_cfg.get('tau', 0.01),
+        smoothap_n_pos=smoothap_cfg.get('n_pos', 8),
+        smoothap_n_neg=smoothap_cfg.get('n_neg', 32),
+        smoothap_batch_anchors=smoothap_cfg.get('batch_anchors', 64),
+        edge_aux_lambda=config['training'].get('edge_aux_lambda', 0.0),
     )
 
     # ========================================================================
-    # Stage 6: Training
+    # Stage 6: Training (or validate-only)
     # ========================================================================
-    logging.info("")
-    logging.info("[6/6] Starting GNN training...")
-    logging.info("=" * 80)
 
-    # poses and descriptors already extracted in Stage 4
-    logging.info(f"Training configuration:")
-    logging.info(f"  Epochs: {config['training']['n_epochs']}")
-    logging.info(f"  Learning rate: {config['training']['learning_rate']}")
-    logging.info(f"  Temperature: {config['training']['temperature']}")
-    logging.info(f"  Sequences: {current_seq_id} (per-sequence mining enabled)")
-    logging.info("")
+    if args.validate_only:
+        # ── Validate-only mode ─────────────────────────────────────────────
+        logging.info("")
+        logging.info("[6/6] VALIDATE-ONLY MODE")
+        logging.info("=" * 80)
 
-    # Create triplet miner from config (with GPU acceleration)
-    from gnn.triplet_miner import create_triplet_miner
-    triplet_config = config.get('triplet', {})
-    triplet_miner = create_triplet_miner(
-        positive_distance_max=triplet_config.get('positive_distance_max', 5.0),
-        negative_distance_min=triplet_config.get('negative_distance_min', 10.0),
-        positive_temporal_min=triplet_config.get('min_temporal_distance', 30),
-        negative_temporal_min=triplet_config.get('min_temporal_distance', 30),
-        mining_strategy=triplet_config.get('mining_strategy', 'hard'),
-    )
-    logging.info(f"  Triplet mining device: {triplet_miner.device}")
+        # Load model weights only (skip optimizer — not needed for eval)
+        ckpt_path = os.path.join(checkpoint_dir, 'best_model.pth')
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        missing, unexpected = gnn.load_state_dict(ckpt['model_state_dict'], strict=False)
+        if missing:
+            logging.warning(f"Missing keys (new params, using defaults): {missing}")
+        if unexpected:
+            logging.warning(f"Unexpected keys (removed): {unexpected}")
+        logging.info(f"  Loaded model from {ckpt_path} (epoch {ckpt.get('epoch', '?')}, "
+                     f"best R@1={ckpt.get('best_val_metric', '?')})")
+        logging.info(f"  Graph params: confidence_level={bayesian_config.get('confidence_level', 'N/A')}, "
+                     f"similarity_max_k={similarity_max_k}, "
+                     f"multiscale_min_consistency={multiscale_min_consistency}")
 
-    # Free VRAM used during graph building / data loading before training
-    gc.collect()
-    torch.cuda.empty_cache()
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
-    try:
-        with profiler.profile('training'):
-            trainer.train(
-                train_graph=train_graph,
-                train_poses=train_poses,
-                train_descriptors=train_descriptors,
-                train_sequence_ids=train_sequence_ids,
-                val_datasets=val_datasets_info,
-                n_epochs=config['training']['n_epochs'],
-                triplet_miner=triplet_miner
-            )
-    except Exception as e:
-        logging.error(f"Training failed: {e}", exc_info=True)
-        raise
+        metrics = trainer.validate_all(
+            val_datasets_info,
+            per_query_dump_dir=args.dump_per_query_dir,
+        )
+        logging.info("")
+        logging.info("VALIDATE-ONLY COMPLETE")
+        logging.info(f"  Avg R@1: {metrics['_average']['recall@1']:.4f} "
+                     f"(raw: {metrics['_average']['raw_recall@1']:.4f}, "
+                     f"ctx: {metrics['_average']['ctx_recall@1']:.4f})")
+
+    else:
+        # ── Normal training mode ───────────────────────────────────────────
+        logging.info("")
+        logging.info("[6/6] Starting GNN training...")
+        logging.info("=" * 80)
+
+        # poses and descriptors already extracted in Stage 4
+        logging.info(f"Training configuration:")
+        logging.info(f"  Epochs: {config['training']['n_epochs']}")
+        logging.info(f"  Learning rate: {config['training']['learning_rate']}")
+        logging.info(f"  Temperature: {config['training']['temperature']}")
+        logging.info(f"  Sequences: {current_seq_id} (per-sequence mining enabled)")
+        logging.info("")
+
+        # Create triplet miner from config (with GPU acceleration)
+        from gnn.triplet_miner import create_triplet_miner
+        triplet_config = config.get('triplet', {})
+        triplet_miner = create_triplet_miner(
+            positive_distance_max=triplet_config.get('positive_distance_max', 5.0),
+            negative_distance_min=triplet_config.get('negative_distance_min', 10.0),
+            positive_temporal_min=triplet_config.get('min_temporal_distance', 30),
+            negative_temporal_min=triplet_config.get('min_temporal_distance', 30),
+            mining_strategy=triplet_config.get('mining_strategy', 'hard'),
+        )
+        logging.info(f"  Triplet mining device: {triplet_miner.device}")
+
+        # Free VRAM used during graph building / data loading before training
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # Two-pass refinement kwargs: params forwarded to trainer._refine_similarity_edges
+        refine_fit_kwargs = {
+            'pos_dist': triplet_config.get('positive_distance_max', 5.0),
+            'neg_dist': triplet_config.get('negative_distance_min', 10.0),
+            'min_temporal_gap': triplet_config.get('min_temporal_distance', 30),
+            'n_samples': graph_config.get('n_samples', 1_000_000),
+        }
+        refine_edge_kwargs = {
+            'similarity_threshold': similarity_threshold,
+            'similarity_max_k': similarity_max_k,
+            'similarity_exclude_temporal': similarity_exclude_temporal,
+            'similarity_metric': similarity_metric,
+            'prior_signal': prior_signal,
+            'channel_splits': channel_splits,
+            'multiscale_min_consistency': multiscale_min_consistency,
+            **bayesian_config,  # confidence_level, base_prior, density_k, density_beta
+        }
+
+        try:
+            training_config = config.get('training', {})
+            with profiler.profile('training'):
+                trainer.train(
+                    train_graph=train_graph,
+                    train_poses=train_poses,
+                    train_descriptors=train_descriptors,
+                    train_sequence_ids=train_sequence_ids,
+                    val_datasets=val_datasets_info,
+                    n_epochs=training_config.get('n_epochs', 100),
+                    triplet_miner=triplet_miner,
+                    mine_every_n_epochs=training_config.get('mine_every_n_epochs', 1),
+                    validate_every_n_epochs=training_config.get('validate_every_n_epochs', 1),
+                    two_pass_cfg=two_pass_cfg if two_pass_enabled else None,
+                    refine_fit_kwargs=refine_fit_kwargs,
+                    refine_edge_kwargs=refine_edge_kwargs,
+                )
+        except Exception as e:
+            logging.error(f"Training failed: {e}", exc_info=True)
+            raise
 
     # ========================================================================
     # Summary

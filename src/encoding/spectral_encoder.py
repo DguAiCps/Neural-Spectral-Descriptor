@@ -433,6 +433,46 @@ class SpectralEncoder(nn.Module):
         # Encode
         return self.encode_projected_image(image_tensor, return_entropy=return_entropy)
 
+    def compute_fft_magnitudes(self, points: np.ndarray) -> np.ndarray:
+        """
+        Compute FFT magnitude spectrum without binning (for caching).
+
+        Runs the same pipeline as encode_projected_image up to (and including)
+        the optional log transform, but stops before binning.
+
+        Args:
+            points: (N, 3) or (N, 4) point cloud
+
+        Returns:
+            (n_rows, n_freqs) float32 FFT magnitude spectrum
+        """
+        image_2d, _ = self.projector.project(points, keep_intensity=False)
+        if self.interpolate_empty:
+            if self.projection_type == 'bev':
+                image_2d = interpolate_bev_image(image_2d, method='linear')
+            else:
+                image_2d = interpolate_range_image(image_2d, method='linear')
+
+        image_tensor = torch.from_numpy(image_2d).float().to(self.alpha.device)
+
+        # Sensor-agnostic row binning (range_image only)
+        if self.projection_type != 'bev' and image_tensor.shape[0] != self.target_elevation_bins:
+            image_tensor = torch.nn.functional.adaptive_avg_pool2d(
+                image_tensor.unsqueeze(0).unsqueeze(0),
+                (self.target_elevation_bins, image_tensor.shape[1])
+            ).squeeze()
+
+        if self.zero_center:
+            image_tensor = image_tensor - image_tensor.mean(dim=1, keepdim=True)
+
+        fft_output = torch.fft.rfft(image_tensor, dim=1, norm='ortho')
+        fft_magnitudes = torch.abs(fft_output) * np.sqrt(self.n_azimuth)
+
+        if self.log_magnitude:
+            fft_magnitudes = torch.log(fft_magnitudes + self.epsilon)
+
+        return fft_magnitudes.detach().cpu().numpy().astype(np.float32)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass (for use in neural network training)
@@ -528,6 +568,7 @@ class SpectralEncoderNumpy:
         self.alpha = alpha
         self.epsilon = epsilon
         self.projection_type = projection_type
+        self.target_elevation_bins = target_elevation_bins
         self.zero_center = zero_center
         self.log_magnitude = log_magnitude
         self.binning_strategy = binning_strategy
@@ -733,6 +774,42 @@ class SpectralEncoderNumpy:
         else:
             image_2d = interpolate_range_image(image_2d, method='linear')
         return self.encode_range_image(image_2d, return_entropy=return_entropy)
+
+    def compute_fft_magnitudes(self, points: np.ndarray) -> np.ndarray:
+        """
+        Compute FFT magnitude spectrum without binning (for caching).
+
+        Args:
+            points: (N, 3) or (N, 4) point cloud
+
+        Returns:
+            (n_rows, n_freqs) float32 FFT magnitude spectrum
+        """
+        image_2d, _ = self.projector.project(points, keep_intensity=False)
+        if self.projection_type == 'bev':
+            image_2d = interpolate_bev_image(image_2d, method='linear')
+        else:
+            image_2d = interpolate_range_image(image_2d, method='linear')
+
+        # Sensor-agnostic row binning (range_image only)
+        if self.projection_type != 'bev':
+            from scipy.ndimage import zoom
+            n_rows_current = image_2d.shape[0]
+            target = getattr(self, 'target_elevation_bins', n_rows_current)
+            if n_rows_current != target:
+                ratio = target / n_rows_current
+                image_2d = zoom(image_2d, (ratio, 1), order=1)
+
+        if self.zero_center:
+            image_2d = image_2d - image_2d.mean(axis=1, keepdims=True)
+
+        fft_output = np.fft.rfft(image_2d, axis=1, norm='ortho')
+        fft_magnitudes = np.abs(fft_output) * np.sqrt(self.n_azimuth)
+
+        if self.log_magnitude:
+            fft_magnitudes = np.log(fft_magnitudes + self.epsilon)
+
+        return fft_magnitudes.astype(np.float32)
 
 
 def test_rotation_invariance(

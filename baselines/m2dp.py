@@ -2,11 +2,22 @@
 M2DP baseline — Multi-view 2D Projection descriptor.
 
 Reference: He, Li, et al. (2016) "M2DP: A Novel 3D Point Cloud Descriptor
-and Its Application in Loop Closure Detection"
+and Its Application in Loop Closure Detection", IROS 2016, Algorithm 1.
 
-Projects 3D points onto multiple 2D planes defined by (azimuth, elevation)
-pairs, computes polar histograms on each plane, then extracts the principal
-components via SVD as the descriptor.
+Pipeline:
+    1. PCA pose normalization (Algorithm 1 step 1) — rotate the point cloud
+       so its principal axes align with the world frame; sign-disambiguate
+       each axis via the skewness convention (Section III-A) so that the
+       descriptor is invariant to arbitrary cloud orientation.
+    2. Project onto p × q planes defined by (azimuth, elevation) pairs.
+    3. Per-plane polar histogram → (p·q, l·t) signature matrix.
+    4. SVD: descriptor = first left + first right singular vectors → 192D.
+
+Note on centering: the original paper centers on the cloud centroid (object
+recognition with arbitrary pose). For LiDAR SLAM the sensor-centric frame is
+already consistent across scans, so we keep the sensor at the origin
+(centroid_center=False default). Set centroid_center=True to reproduce the
+exact paper variant.
 """
 
 import numpy as np
@@ -20,13 +31,16 @@ class M2DP(BaselineEncoder):
 
     def __init__(self, n_azimuth_planes=4, n_elevation_planes=16,
                  n_distance_bins=8, n_angle_bins=16, max_range=80.0,
-                 max_points=4096):
+                 max_points=4096, centroid_center=False,
+                 pca_pose_normalization=True):
         self.p = n_azimuth_planes
         self.q = n_elevation_planes
         self.l = n_distance_bins
         self.t = n_angle_bins
         self.max_range = max_range
         self.max_points = max_points
+        self.centroid_center = centroid_center
+        self.pca_pose_normalization = pca_pose_normalization
 
     @property
     def name(self):
@@ -71,13 +85,32 @@ class M2DP(BaselineEncoder):
             indices = np.random.choice(len(xyz), self.max_points, replace=False)
             xyz = xyz[indices]
 
-        # In LiDAR SLAM the sensor is at the origin, so no centering is applied.
-        # The original M2DP paper centers by cloud centroid for object recognition
-        # (arbitrary pose), but for place recognition the sensor-centric frame is
-        # already consistent across scans — centering by the point cloud centroid
-        # would shift the reference away from the sensor and discard directional
-        # structure, hurting discrimination.
-        xyz_c = xyz  # (N, 3), sensor at origin
+        # Centering: paper centers on centroid for object recognition. For LiDAR
+        # SLAM the sensor-centric frame is consistent across scans, so the
+        # default keeps the sensor at the origin. Set centroid_center=True to
+        # reproduce the exact paper variant.
+        if self.centroid_center:
+            xyz_c = xyz - xyz.mean(axis=0, keepdims=True)
+        else:
+            xyz_c = xyz
+
+        # PCA pose normalization (paper Algorithm 1 step 1, Section III-A).
+        # Without this, the SVD signature is rotation-invariant only in
+        # expectation across the multi-azimuth grid; with it, the descriptor is
+        # exactly invariant up to the sign disambiguation convention.
+        if self.pca_pose_normalization and len(xyz_c) >= 3:
+            cov = (xyz_c.T @ xyz_c) / len(xyz_c)
+            # eigh returns ascending eigenvalues; reverse for descending.
+            _, evecs = np.linalg.eigh(cov)
+            evecs = evecs[:, ::-1].copy()
+            # Sign disambiguation: paper §III-A uses positive-skewness convention
+            # — for each principal axis, flip the sign so the third moment of
+            # projected coordinates is positive.
+            for k in range(3):
+                proj = xyz_c @ evecs[:, k]
+                if np.mean(proj ** 3) < 0:
+                    evecs[:, k] = -evecs[:, k]
+            xyz_c = xyz_c @ evecs
 
         # Max distance for histogram binning
         max_dist = np.percentile(np.linalg.norm(xyz_c, axis=1), 99) + 1e-6

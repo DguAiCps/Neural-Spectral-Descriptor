@@ -293,6 +293,241 @@ def _build_similarity_edges(
     return edges
 
 
+def build_similarity_edges_from_poses(
+    poses: np.ndarray,
+    descriptors: np.ndarray,
+    temporal_neighbor_sets: dict,
+    sequence_ids: np.ndarray = None,
+    pos_dist: float = 5.0,
+    min_temporal_gap: int = 30,
+    similarity_max_k: int = 10,
+) -> List[Tuple[int, int, float, float, float]]:
+    """Ground-truth pose-based similarity edges ("same-place" by definition).
+
+    For each node i, select up to `similarity_max_k` nearest neighbors j
+    satisfying: pose_dist(i,j) < pos_dist, |i-j| >= min_temporal_gap,
+    and j not already a temporal neighbor. Cross-sequence pairs are excluded
+    when `sequence_ids` is provided (poses live in sequence-local frames).
+
+    Returns the same 5-tuple format as _build_similarity_edges:
+    (src, dst, cos_sim, l2, posterior=1.0). Descriptor-based cos_sim/l2 are
+    computed so the edge encoder sees consistent features.
+    """
+    from scipy.spatial import cKDTree
+
+    positions = poses[:, :3, 3].astype(np.float32)
+    norms = np.linalg.norm(descriptors, axis=1, keepdims=True)
+    norms = np.maximum(norms, 1e-8)
+    descs_normed = (descriptors / norms).astype(np.float32)
+
+    def _select_within_segment(segment_indices: np.ndarray) -> None:
+        """Build KD-tree on segment_indices and append edges for each node."""
+        if len(segment_indices) < 2:
+            return
+        seg_positions = positions[segment_indices]
+        tree = cKDTree(seg_positions)
+        for local_i, global_i in enumerate(segment_indices):
+            neighbor_locals = tree.query_ball_point(seg_positions[local_i], pos_dist)
+            temporal_set = temporal_neighbor_sets.get(int(global_i), set())
+            candidates: List[Tuple[float, int]] = []
+            for local_j in neighbor_locals:
+                global_j = int(segment_indices[local_j])
+                if global_i == global_j:
+                    continue
+                if abs(global_i - global_j) < min_temporal_gap:
+                    continue
+                if global_j in temporal_set:
+                    continue
+                d = float(np.linalg.norm(positions[global_i] - positions[global_j]))
+                candidates.append((d, global_j))
+            candidates.sort()
+            for d, j in candidates[:similarity_max_k]:
+                cos_sim = float(np.dot(descs_normed[int(global_i)], descs_normed[j]))
+                l2 = float(np.linalg.norm(descriptors[int(global_i)] - descriptors[j]))
+                edges.append((int(global_i), j, cos_sim, l2, 1.0))
+
+    edges: List[Tuple[int, int, float, float, float]] = []
+    if sequence_ids is not None:
+        for seq_id in np.unique(sequence_ids):
+            seg = np.where(sequence_ids == seq_id)[0]
+            _select_within_segment(seg)
+    else:
+        _select_within_segment(np.arange(len(positions)))
+
+    return edges
+
+
+def attach_pose_gt_similarity_edges(
+    graph: Data,
+    poses: np.ndarray,
+    descriptors: np.ndarray,
+    sequence_ids: np.ndarray = None,
+    pos_dist: float = 5.0,
+    min_temporal_gap: int = 30,
+    similarity_max_k: int = 10,
+) -> Tuple[Data, int]:
+    """Replace the graph's similarity edges (type=1) with ground-truth
+    pose-based "same-place" edges. Temporal edges (type=0) are preserved.
+
+    This is a train-time supervision signal: poses are available during
+    training, so the GNN sees perfectly clean same-place message-passing
+    edges. At inference we do NOT add these edges; val/test graphs run with
+    temporal-only structure.
+
+    Returns (graph, n_similarity_edges). Graph is modified in place.
+    """
+    device = graph.edge_index.device
+
+    # Reconstruct temporal_neighbor_sets from preserved edges (type 0)
+    temporal_mask = (graph.edge_type == 0).cpu().numpy()
+    ei_cpu = graph.edge_index.cpu().numpy()
+    attr_cpu = graph.edge_attr.cpu().numpy()
+    type_cpu = graph.edge_type.cpu().numpy()
+
+    temporal_ei = ei_cpu[:, temporal_mask]
+    temporal_neighbor_sets = defaultdict(set)
+    for k in range(temporal_ei.shape[1]):
+        src, dst = int(temporal_ei[0, k]), int(temporal_ei[1, k])
+        temporal_neighbor_sets[src].add(dst)
+
+    # Build GT pose edges
+    sim_edges = build_similarity_edges_from_poses(
+        poses, descriptors, temporal_neighbor_sets,
+        sequence_ids=sequence_ids,
+        pos_dist=pos_dist,
+        min_temporal_gap=min_temporal_gap,
+        similarity_max_k=similarity_max_k,
+    )
+
+    # Combine preserved temporal + new GT similarity edges
+    kept_ei = temporal_ei
+    kept_attr = attr_cpu[temporal_mask]
+    kept_type = type_cpu[temporal_mask]
+
+    if len(sim_edges) > 0:
+        sim_ei = np.empty((2, len(sim_edges)), dtype=np.int64)
+        sim_attr = np.empty((len(sim_edges), 5), dtype=np.float32)
+        sim_type = np.ones(len(sim_edges), dtype=np.int64)
+        for i, (src, dst, cos_sim, l2, posterior) in enumerate(sim_edges):
+            sim_ei[0, i] = src
+            sim_ei[1, i] = dst
+            l2_norm = np.log1p(l2) / 5.0
+            sim_attr[i] = [0.0, 0.0, cos_sim, l2_norm, posterior]
+
+        all_ei = np.concatenate([kept_ei, sim_ei], axis=1)
+        all_attr = np.concatenate([kept_attr, sim_attr], axis=0)
+        all_type = np.concatenate([kept_type, sim_type], axis=0)
+    else:
+        all_ei = kept_ei
+        all_attr = kept_attr
+        all_type = kept_type
+
+    graph.edge_index = torch.from_numpy(all_ei).long().to(device)
+    graph.edge_attr = torch.from_numpy(all_attr).float().to(device)
+    graph.edge_type = torch.from_numpy(all_type).long().to(device)
+
+    return graph, len(sim_edges)
+
+
+def rebuild_similarity_edges(
+    graph: Data,
+    new_descriptors: np.ndarray,
+    similarity_threshold: float = 0.993,
+    similarity_max_k: int = 10,
+    similarity_exclude_temporal: bool = True,
+    similarity_dist=None,
+    confidence_level: float = 0.95,
+    density_k: int = 50,
+    density_beta: float = 10.0,
+    base_prior: float = 0.01,
+    spectral_entropies: np.ndarray = None,
+    prior_signal: str = 'density',
+    channel_splits: List[Tuple[int, int]] = None,
+    multiscale_min_consistency: float = 0.0,
+    similarity_metric: str = 'l2',
+    standardization_stats=None,
+) -> Tuple[Data, int]:
+    """Replace similarity edges (edge_type=1) on a graph with newly computed ones.
+
+    Used by two-pass refinement: after training begins, call this periodically
+    with embeddings from the current GNN (typically the ctx portion) to rebuild
+    similarity edges in a discriminative space.
+
+    Temporal edges (edge_type=0) are preserved unchanged.
+
+    Args:
+        graph: Existing PyG Data with edge_index, edge_attr (N, 5), edge_type.
+        new_descriptors: (N, D) descriptor matrix to build similarity edges from.
+            Typically GNN ctx output of shape (N, context_dim).
+        Remaining kwargs: forwarded to _build_similarity_edges.
+
+    Returns:
+        (graph, n_similarity_edges) — graph is modified in place.
+    """
+    device = graph.edge_index.device
+    n_nodes = graph.num_nodes
+
+    # Reconstruct temporal_neighbor_sets from preserved edges (type 0)
+    temporal_mask = (graph.edge_type == 0).cpu().numpy()
+    ei_cpu = graph.edge_index.cpu().numpy()
+    attr_cpu = graph.edge_attr.cpu().numpy()
+    type_cpu = graph.edge_type.cpu().numpy()
+
+    temporal_ei = ei_cpu[:, temporal_mask]  # (2, n_temporal)
+    temporal_neighbor_sets = defaultdict(set)
+    for k in range(temporal_ei.shape[1]):
+        src, dst = int(temporal_ei[0, k]), int(temporal_ei[1, k])
+        temporal_neighbor_sets[src].add(dst)
+
+    # Build new similarity edges via existing helper
+    sim_edges = _build_similarity_edges(
+        new_descriptors, temporal_neighbor_sets,
+        similarity_threshold=similarity_threshold,
+        similarity_max_k=similarity_max_k,
+        similarity_exclude_temporal=similarity_exclude_temporal,
+        similarity_dist=similarity_dist,
+        confidence_level=confidence_level,
+        density_k=density_k,
+        density_beta=density_beta,
+        base_prior=base_prior,
+        spectral_entropies=spectral_entropies,
+        prior_signal=prior_signal,
+        channel_splits=channel_splits,
+        multiscale_min_consistency=multiscale_min_consistency,
+        similarity_metric=similarity_metric,
+        standardization_stats=standardization_stats,
+    )
+
+    # Combine preserved temporal + new similarity
+    kept_ei = temporal_ei
+    kept_attr = attr_cpu[temporal_mask]
+    kept_type = type_cpu[temporal_mask]
+
+    if len(sim_edges) > 0:
+        sim_ei = np.empty((2, len(sim_edges)), dtype=np.int64)
+        sim_attr = np.empty((len(sim_edges), 5), dtype=np.float32)
+        sim_type = np.ones(len(sim_edges), dtype=np.int64)
+        for i, (src, dst, cos_sim, l2, posterior) in enumerate(sim_edges):
+            sim_ei[0, i] = src
+            sim_ei[1, i] = dst
+            l2_norm = np.log1p(l2) / 5.0
+            sim_attr[i] = [0.0, 0.0, cos_sim, l2_norm, posterior]
+
+        all_ei = np.concatenate([kept_ei, sim_ei], axis=1)
+        all_attr = np.concatenate([kept_attr, sim_attr], axis=0)
+        all_type = np.concatenate([kept_type, sim_type], axis=0)
+    else:
+        all_ei = kept_ei
+        all_attr = kept_attr
+        all_type = kept_type
+
+    graph.edge_index = torch.from_numpy(all_ei).long().to(device)
+    graph.edge_attr = torch.from_numpy(all_attr).float().to(device)
+    graph.edge_type = torch.from_numpy(all_type).long().to(device)
+
+    return graph, len(sim_edges)
+
+
 class TemporalGraphManager:
     """
     Manages temporal graph of keyframes for GNN processing
@@ -919,6 +1154,24 @@ def build_graph_from_keyframes_batch(
         edge_attr = torch.empty((0, 5), dtype=torch.float32, device=device)
         edge_type = torch.empty(0, dtype=torch.long, device=device)
 
+    # 4.5 Compute pose-GT labels for each edge (used by EdgeConfidenceGate aux loss).
+    # label = 1.0 if endpoints are same-place (pose_dist < pos_dist threshold), else 0.0.
+    # Temporal edges always 1.0 (always informative). Requires poses.
+    if poses is not None and len(edges) > 0:
+        edges_arr = np.array(edges, dtype=np.int64)
+        positions = poses[:, :3, 3]
+        pose_dists = np.linalg.norm(
+            positions[edges_arr[:, 0]] - positions[edges_arr[:, 1]], axis=1
+        )
+        # Same-place threshold = 5m (matches positive_distance_max)
+        labels = (pose_dists < 5.0).astype(np.float32)
+        # Temporal edges (type=0): force label=1.0
+        types_arr = np.array(edge_types, dtype=np.int64)
+        labels[types_arr == 0] = 1.0
+        edge_pose_label = torch.from_numpy(labels).to(device)
+    else:
+        edge_pose_label = torch.empty(0, dtype=torch.float32, device=device)
+
     # 5. Create graph
     graph = Data(
         x=features,
@@ -927,5 +1180,7 @@ def build_graph_from_keyframes_batch(
         edge_type=edge_type,
         num_nodes=n_nodes
     ).to(device)
+    # Attach pose-GT labels separately (PyG Data supports arbitrary tensor attrs)
+    graph.edge_pose_label = edge_pose_label
 
     return graph

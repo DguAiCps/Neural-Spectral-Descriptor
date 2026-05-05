@@ -12,7 +12,11 @@ build/
 # Training outputs
 logs/
 outputs/
+results/
 checkpoints/
+
+# Baseline pretrained weights (download separately, not vendored)
+baselines/weights/
 **/checkpoints/
 **/checkpoints_v2/
 docs/

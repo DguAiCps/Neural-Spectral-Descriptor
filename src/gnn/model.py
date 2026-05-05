@@ -133,6 +133,53 @@ class EdgeEncoder(nn.Module):
         return self.mlp(raw_feats)
 
 
+class EdgeConfidenceGate(nn.Module):
+    """Per-edge confidence gate via additive logit bias pre-softmax.
+
+    Produces a scalar logit per edge: large positive → boost attention,
+    large negative → suppress. Added to attention scores before softmax,
+    softmax handles normalization (no NaN risk from division).
+
+    Equivalent in spirit to multiplicative gating (`softmax(s + log(c))` =
+    `softmax(s) * c / sum(softmax(s) * c)`), but numerically stable.
+
+    Trained with auxiliary BCE loss on sigmoid(logit) vs pose-GT same-place
+    label. Temporal edges always get bias=0 (no attention shift; existing
+    edge_bias_mlp handles temporal-specific weighting).
+
+    Init: last layer zero → bias=0 at start → no effect on attention initially
+    (matches no-gate behavior, learned divergence over time).
+    """
+
+    def __init__(self, edge_dim: int, hidden_dim: int = 16):
+        super().__init__()
+        self.classifier = nn.Sequential(
+            nn.Linear(edge_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+        )
+        # Zero init → bias=0, sigmoid(0)=0.5 for diagnostic c_e
+        nn.init.zeros_(self.classifier[-1].weight)
+        nn.init.zeros_(self.classifier[-1].bias)
+
+    def forward(self, edge_emb: torch.Tensor, edge_type: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            edge_emb: (E, edge_dim) edge embeddings from EdgeEncoder
+            edge_type: (E,) LongTensor (0=temporal, 1=similarity)
+
+        Returns:
+            (E, 1) bounded logit in [-3, 3] (c_e in [0.047, 0.953]).
+            Bounding prevents FP16 softmax underflow (exp(-15) < FP16 min)
+            when gate learns extreme suppression. Temporal edges forced to 0.
+        """
+        # Soft-clamp via tanh: logit = 3 * tanh(MLP(edge_emb)) ∈ [-3, 3]
+        # Differentiable, no hard cliff. c_e ∈ [0.047, 0.953].
+        logit = 3.0 * torch.tanh(self.classifier(edge_emb))
+        is_temporal = (edge_type == 0).unsqueeze(-1)
+        return torch.where(is_temporal, torch.zeros_like(logit), logit)
+
+
 class DiffAttnConv(MessagePassing):
     """
     Difference-based Attention Convolution with edge score bias.
@@ -195,13 +242,16 @@ class DiffAttnConv(MessagePassing):
         x: torch.Tensor,
         edge_index: torch.Tensor,
         edge_attr: torch.Tensor = None,
+        edge_logit: torch.Tensor = None,
         return_attention_weights: bool = False
     ) -> torch.Tensor:
         """Memory-efficient forward bypassing propagate().
 
-        Uses nested gradient checkpointing to avoid storing Q, K alongside
-        V, msg simultaneously.  Saves ~2.8 GiB for 2.87M-edge graphs by
-        ensuring Q/K are freed before V/msg are allocated.
+        Args:
+            edge_logit: optional (n_edges, 1) additive bias added to attention
+                scores BEFORE softmax. Large positive → boosts edge; large
+                negative → suppresses. Numerically stable (softmax handles
+                normalization automatically).
         """
         self._return_attn = return_attention_weights
         self._attn_weights = None
@@ -214,23 +264,24 @@ class DiffAttnConv(MessagePassing):
         diff = x[src] - x_tgt     # difference (= x_j - x_i)
 
         # --- Nested checkpoint: Q, K freed after attn scores produced ---
-        # During backward, Q and K are recomputed only when their gradients
-        # are needed, at which point V and msg have already been freed.
-        def compute_attn_scores(x_tgt_in, diff_in, edge_attr_in):
+        def compute_attn_scores(x_tgt_in, diff_in, edge_attr_in, edge_logit_in):
             Q = self.W_q(x_tgt_in).view(-1, self.heads, self.head_dim)
             K = self.W_k(diff_in).view(-1, self.heads, self.head_dim)
             scores = torch.einsum('ehd,ehd->eh', Q, K) / self.scale
             if edge_attr_in is not None and self.bias_mlp is not None:
                 scores = scores + self.bias_mlp(edge_attr_in)
+            if edge_logit_in is not None:
+                # Broadcast (E, 1) over heads
+                scores = scores + edge_logit_in
             return scores
 
         if self.training and torch.is_grad_enabled():
             raw_attn = grad_checkpoint(
-                compute_attn_scores, x_tgt, diff, edge_attr,
+                compute_attn_scores, x_tgt, diff, edge_attr, edge_logit,
                 use_reentrant=False
             )
         else:
-            raw_attn = compute_attn_scores(x_tgt, diff, edge_attr)
+            raw_attn = compute_attn_scores(x_tgt, diff, edge_attr, edge_logit)
 
         attn = softmax(raw_attn, tgt, num_nodes=n_nodes)
         attn = self.dropout(attn)
@@ -274,11 +325,16 @@ class SpectralGNN(nn.Module):
         dropout: float = 0.1,
         residual: bool = True,
         edge_encoder_config: dict = None,
-        gradient_checkpointing: bool = True
+        gradient_checkpointing: bool = True,
+        spectral_policy: Optional[nn.Module] = None,
+        norm_type: str = 'batch_norm',
+        use_residual_gate: bool = False,
+        gate_hidden_dim: int = 64,
+        use_edge_confidence_gate: bool = False,
+        edge_gate_hidden_dim: int = 16,
     ):
         super().__init__()
 
-        self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.context_dim = context_dim
         self.n_layers = n_layers
@@ -286,10 +342,18 @@ class SpectralGNN(nn.Module):
         self.dropout = dropout
         self.residual = residual
         self.gradient_checkpointing = gradient_checkpointing
+        self.use_residual_gate = use_residual_gate
 
-        # Input projection: 256 -> 256
-        self.input_proj = nn.Linear(input_dim, hidden_dim)
-        self.input_norm = nn.BatchNorm1d(hidden_dim)
+        # Spectral policy: if provided, overrides input_dim with policy output
+        self.spectral_policy = spectral_policy
+        if spectral_policy is not None:
+            self.input_dim = spectral_policy.output_dim
+        else:
+            self.input_dim = input_dim
+
+        # Input projection
+        self.input_proj = nn.Linear(self.input_dim, hidden_dim)
+        self.input_norm = self._make_norm(hidden_dim, norm_type)
 
         # Edge encoder
         if edge_encoder_config is not None:
@@ -312,10 +376,55 @@ class SpectralGNN(nn.Module):
                     dropout=dropout
                 )
             )
-            self.batch_norms.append(nn.BatchNorm1d(hidden_dim))
+            self.batch_norms.append(self._make_norm(hidden_dim, norm_type))
 
         # Output projection: 256 -> context_dim
         self.output_proj = nn.Linear(hidden_dim, context_dim)
+
+        # Residual gate: per-node scalar α ∈ [0,1] decides ctx contribution
+        # output = cat(raw_norm, α · ctx_norm). α=0 → raw only; α=1 → 50/50 mix
+        # (matches current behavior). Lets the model adapt: KITTI raw is great
+        # → push α toward 0; HeLiPR raw is weak → push α toward 1.
+        if use_residual_gate:
+            self.gate = nn.Sequential(
+                nn.Linear(hidden_dim, gate_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(gate_hidden_dim, 1),
+            )
+            # Init last layer to zero → sigmoid(0)=0.5 (neutral start, partial ctx).
+            nn.init.zeros_(self.gate[-1].weight)
+            nn.init.zeros_(self.gate[-1].bias)
+        else:
+            self.gate = None
+
+        # Diagnostic: store last-forward alpha for logging
+        self._last_alpha = None
+
+        # Edge confidence gate: per-edge soft same-place classifier
+        # c_e = sigmoid(MLP(edge_emb)). Multiplies attention weight in DiffAttnConv.
+        # Trained with auxiliary BCE loss against pose-GT labels (during training).
+        # Temporal edges always c_e=1 (always informative).
+        self.use_edge_confidence_gate = use_edge_confidence_gate
+        if use_edge_confidence_gate:
+            assert effective_edge_dim is not None, (
+                "edge_encoder required when use_edge_confidence_gate=True"
+            )
+            self.edge_gate = EdgeConfidenceGate(
+                edge_dim=effective_edge_dim,
+                hidden_dim=edge_gate_hidden_dim,
+            )
+        else:
+            self.edge_gate = None
+        self._last_edge_conf = None  # diagnostic for aux loss
+
+    @staticmethod
+    def _make_norm(dim: int, norm_type: str) -> nn.Module:
+        if norm_type == 'layer_norm':
+            return nn.LayerNorm(dim)
+        elif norm_type == 'none':
+            return nn.Identity()
+        else:  # 'batch_norm' (default)
+            return nn.BatchNorm1d(dim)
 
     def forward(self, data: Data) -> torch.Tensor:
         """
@@ -324,9 +433,21 @@ class SpectralGNN(nn.Module):
         Returns:
             (n_nodes, input_dim + context_dim) = (n, 512) concatenated embeddings
         """
-        x, edge_index = data.x, data.edge_index
+        edge_index = data.edge_index
         edge_attr = getattr(data, 'edge_attr', None)
         edge_type = getattr(data, 'edge_type', None)
+
+        # If spectral policy is available, transform FFT magnitudes → descriptor
+        if self.spectral_policy is not None and hasattr(data, 'x_fft') and data.x_fft is not None:
+            x_fft = data.x_fft.view(-1, self.spectral_policy.n_rings, self.spectral_policy.n_freqs)
+            # Gradient checkpointing: recompute policy activations during backward
+            # to avoid storing large intermediates (e.g. conv1d: 178K×32×181 = ~8GB)
+            if self.training and torch.is_grad_enabled() and any(p.requires_grad for p in self.spectral_policy.parameters()):
+                x = grad_checkpoint(self.spectral_policy, x_fft, use_reentrant=False)
+            else:
+                x = self.spectral_policy(x_fft)  # (N, policy_output_dim)
+        else:
+            x = data.x
 
         # Cast to AMP dtype early to prevent FP32 edge-level tensor explosion
         # (graph.x is FP32 from numpy; under autocast, keeping it FP32 wastes 150 MB)
@@ -341,6 +462,16 @@ class SpectralGNN(nn.Module):
             edge_embed = self.edge_encoder(edge_attr, edge_type)
         else:
             edge_embed = None
+
+        # Compute per-edge confidence gate (once, shared across all layers).
+        # edge_logit: raw additive bias added to attention scores pre-softmax.
+        # _last_edge_conf: sigmoid(logit) ∈ [0, 1] for BCE supervision + diagnostic.
+        if self.edge_gate is not None and edge_embed is not None and edge_type is not None:
+            edge_logit = self.edge_gate(edge_embed, edge_type)   # (E, 1) raw
+            self._last_edge_conf = torch.sigmoid(edge_logit)     # (E, 1) for BCE
+        else:
+            edge_logit = None
+            self._last_edge_conf = None
 
         # Input projection: 256 -> 256
         h = self.input_proj(x)
@@ -358,8 +489,15 @@ class SpectralGNN(nn.Module):
                 h = h.to(torch.get_autocast_gpu_dtype())
 
             if self.gradient_checkpointing and self.training:
-                # Recompute conv intermediates during backward to save VRAM
-                if edge_embed is not None:
+                # Recompute conv intermediates during backward to save VRAM.
+                if edge_embed is not None and edge_logit is not None:
+                    def _conv_with_logit(h_in, ei, ea, el):
+                        return conv(h_in, ei, edge_attr=ea, edge_logit=el)
+                    h = grad_checkpoint(
+                        _conv_with_logit, h, edge_index, edge_embed, edge_logit,
+                        use_reentrant=False
+                    )
+                elif edge_embed is not None:
                     h = grad_checkpoint(
                         conv, h, edge_index, edge_embed,
                         use_reentrant=False
@@ -371,7 +509,7 @@ class SpectralGNN(nn.Module):
                     )
             else:
                 if edge_embed is not None:
-                    h = conv(h, edge_index, edge_attr=edge_embed)
+                    h = conv(h, edge_index, edge_attr=edge_embed, edge_logit=edge_logit)
                 else:
                     h = conv(h, edge_index)
 
@@ -392,6 +530,13 @@ class SpectralGNN(nn.Module):
         # L2 normalize each part so both contribute equally to distance metrics
         raw_norm = F.normalize(x_raw, p=2, dim=-1)
         ctx_norm = F.normalize(context, p=2, dim=-1)
+
+        # Residual gate: scale ctx contribution per-node based on hidden state.
+        if self.use_residual_gate and self.gate is not None:
+            alpha = torch.sigmoid(self.gate(h))  # (n_nodes, 1) in [0, 1]
+            ctx_norm = alpha * ctx_norm
+            self._last_alpha = alpha.detach()
+
         return torch.cat([raw_norm, ctx_norm], dim=-1)
 
     def forward_with_attention(self, data: Data) -> tuple:
@@ -402,9 +547,16 @@ class SpectralGNN(nn.Module):
             embeddings: (n_nodes, input_dim + context_dim) concatenated embeddings
             attention_weights: List of (edge_index, attention) per layer
         """
-        x, edge_index = data.x, data.edge_index
+        edge_index = data.edge_index
         edge_attr = getattr(data, 'edge_attr', None)
         edge_type = getattr(data, 'edge_type', None)
+
+        # Spectral policy (same logic as forward)
+        if self.spectral_policy is not None and hasattr(data, 'x_fft') and data.x_fft is not None:
+            x_fft = data.x_fft.view(-1, self.spectral_policy.n_rings, self.spectral_policy.n_freqs)
+            x = self.spectral_policy(x_fft)
+        else:
+            x = data.x
 
         x_raw = x
 
@@ -504,7 +656,13 @@ def create_spectral_gnn(
     use_local_updates: bool = True,
     local_update_hops: int = 3,
     edge_encoder_config: dict = None,
-    gradient_checkpointing: bool = True
+    gradient_checkpointing: bool = True,
+    spectral_policy: Optional[nn.Module] = None,
+    norm_type: str = 'batch_norm',
+    use_residual_gate: bool = False,
+    gate_hidden_dim: int = 64,
+    use_edge_confidence_gate: bool = False,
+    edge_gate_hidden_dim: int = 16,
 ) -> nn.Module:
     """
     Factory function to create GNN model
@@ -521,6 +679,9 @@ def create_spectral_gnn(
         edge_encoder_config: EdgeEncoder config dict with keys:
             d_edge, n_edge_types, d_type_embed, d_rot_encode, dropout
         gradient_checkpointing: Recompute conv intermediates during backward to save VRAM
+        spectral_policy: Optional SpectralPolicy module for end-to-end learning.
+            When provided, input_dim is overridden by policy.output_dim.
+        norm_type: Normalization type ('batch_norm', 'layer_norm', 'none')
 
     Returns:
         GNN model (LocalUpdateGNN or SpectralGNN)
@@ -534,7 +695,13 @@ def create_spectral_gnn(
         dropout=dropout,
         residual=True,
         edge_encoder_config=edge_encoder_config,
-        gradient_checkpointing=gradient_checkpointing
+        gradient_checkpointing=gradient_checkpointing,
+        spectral_policy=spectral_policy,
+        norm_type=norm_type,
+        use_residual_gate=use_residual_gate,
+        gate_hidden_dim=gate_hidden_dim,
+        use_edge_confidence_gate=use_edge_confidence_gate,
+        edge_gate_hidden_dim=edge_gate_hidden_dim,
     )
 
     if use_local_updates:

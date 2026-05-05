@@ -35,13 +35,15 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root / "src"))
 sys.path.insert(0, str(project_root))
 
-from baselines.eval_utils import compute_recall_multi_k
+from baselines.eval_utils import compute_recall_multi_k  # noqa: F401  (back-compat)
 
 # Import baseline methods (triggers @register)
 import baselines.scan_context
 import baselines.fresco
 import baselines.m2dp
 import baselines.lidar_iris
+import baselines.pointnetvlad
+import baselines.bevplace
 import baselines.nsc
 from baselines import REGISTRY, get_method
 
@@ -98,6 +100,9 @@ def create_loader(dataset_type, root, sequence):
         from data.helipr_loader import HeLiPRLoader
         seq_path = os.path.join(root, sequence, sequence)
         return HeLiPRLoader(seq_path, lazy_load=True)
+    elif dataset_type == 'mulran':
+        from data.mulran_loader import MulRanLoader
+        return MulRanLoader(root, sequence, lazy_load=True)
     else:
         raise ValueError(f"Unknown dataset type: {dataset_type}")
 
@@ -251,7 +256,8 @@ def build_eval_datasets(config, cache_key, cache_dir, include_test=False, device
 
 # ── Main evaluation ───────────────────────────────────────
 def evaluate_method_on_dataset(method_name, method_instance, point_clouds,
-                               cache_data, poses, config, checkpoint_path, device):
+                               cache_data, poses, config, checkpoint_path, device,
+                               per_query_records=None):
     """
     Evaluate a single method on a single dataset.
 
@@ -264,6 +270,10 @@ def evaluate_method_on_dataset(method_name, method_instance, point_clouds,
         # Use cached descriptors directly
         descriptors = cache_data['descriptors']
         encoding_time_ms = 0.0
+        recalls, n_queries = compute_recall_multi_k(
+            descriptors, poses, k_values=k_values,
+            distance_threshold=5.0, skip_frames=30,
+            per_query_records=per_query_records)
 
     elif method_name == 'nsc_gnn':
         # GNN forward pass
@@ -272,15 +282,18 @@ def evaluate_method_on_dataset(method_name, method_instance, point_clouds,
         descriptors = nsc_gnn.compute_embeddings(
             cache_data, config, checkpoint_path, device)
         encoding_time_ms = (time.perf_counter() - t0) * 1000 / len(poses)
+        recalls, n_queries = compute_recall_multi_k(
+            descriptors, poses, k_values=k_values,
+            distance_threshold=5.0, skip_frames=30,
+            per_query_records=per_query_records)
 
     else:
-        # Standard baseline: encode from point clouds
-        descriptors = method_instance.encode_sequence(point_clouds)
-        encoding_time_ms = method_instance.last_encode_time_ms
-
-    recalls, n_queries = compute_recall_multi_k(
-        descriptors, poses, k_values=k_values,
-        distance_threshold=5.0, skip_frames=30)
+        # Method-owned retrieval (default cosine FAISS, may override).
+        recalls, n_queries = method_instance.compute_recalls(
+            point_clouds, poses, k_values=k_values,
+            distance_threshold=5.0, skip_frames=30,
+            per_query_records=per_query_records)
+        encoding_time_ms = getattr(method_instance, 'last_encode_time_ms', 0.0)
 
     return {
         'recalls': recalls,
@@ -394,6 +407,14 @@ def main():
                         help='Output CSV path')
     parser.add_argument('--device', default='cuda',
                         help='Device for GNN inference')
+    parser.add_argument('--cache-key', default=None,
+                        help='Override auto-computed cache_key — use when '
+                             'evaluating against an existing cache whose '
+                             'config is no longer the active one.')
+    parser.add_argument('--dump-per-query-dir', default=None,
+                        help='If set, dump per-query records (geo distance, '
+                             'rank, |Δyaw|) under <dir>/<method>/<dataset>.json '
+                             'for downstream yaw-conditioned R@1 analysis.')
     args = parser.parse_args()
 
     # Load config
@@ -401,9 +422,10 @@ def main():
         config = yaml.safe_load(f)
 
     cache_dir = config['data']['cache_dir']
-    cache_key = compute_cache_key(config)
+    cache_key = args.cache_key if args.cache_key else compute_cache_key(config)
     print(f"Config: {args.config}")
-    print(f"Cache key: {cache_key}, dir: {cache_dir}")
+    print(f"Cache key: {cache_key}{' (override)' if args.cache_key else ''}, "
+          f"dir: {cache_dir}")
 
     # Resolve methods
     if 'all' in args.methods:
@@ -467,15 +489,32 @@ def main():
             inst = get_method(method_name)()
             print(f"\n  [{inst.short_name}] {inst.name} ({inst.descriptor_dim}D)...")
 
+            per_query = [] if args.dump_per_query_dir else None
             result = evaluate_method_on_dataset(
                 method_name, inst, point_clouds,
-                cache_data, poses, config, args.checkpoint, device)
+                cache_data, poses, config, args.checkpoint, device,
+                per_query_records=per_query)
 
             r = result['recalls']
             print(f"    R@1={r.get(1,0):.4f}  R@5={r.get(5,0):.4f}  "
                   f"R@10={r.get(10,0):.4f}  "
                   f"({result['n_queries']} queries, "
                   f"{result['encoding_time_ms']:.1f} ms/scan)")
+
+            if per_query is not None:
+                dump_subdir = os.path.join(args.dump_per_query_dir, method_name)
+                os.makedirs(dump_subdir, exist_ok=True)
+                dump_path = os.path.join(dump_subdir, f"{ds['display_name']}.json")
+                with open(dump_path, 'w') as f:
+                    json.dump({
+                        'method': method_name,
+                        'dataset': ds['display_name'],
+                        'distance_threshold_m': 5.0,
+                        'skip_frames': 30,
+                        'n_queries': len(per_query),
+                        'records': per_query,
+                    }, f, indent=2)
+                print(f"    [per-query dump] {dump_path}")
 
             all_results[(method_name, ds['display_name'])] = result
 

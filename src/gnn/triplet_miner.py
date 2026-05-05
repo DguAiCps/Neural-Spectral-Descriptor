@@ -56,7 +56,8 @@ def _mine_sequence_worker(args):
         return seq_id, triplets
 
     # Extract positions from poses (seq_poses is already sequence-specific)
-    seq_positions = np.array([seq_poses[i][:3, 3] for i in range(n_seq)])
+    # Opt 9: Vectorized slicing instead of Python loop
+    seq_positions = seq_poses[:, :3, 3]
 
     # Build KD-Tree
     tree = cKDTree(seq_positions)
@@ -274,7 +275,11 @@ class TripletMiner:
         n_workers: int = None
     ) -> List[Tuple[int, int, int]]:
         """
-        Mine triplets in parallel across sequences using ProcessPoolExecutor.
+        Mine triplets in parallel across sequences.
+
+        Opt 2: Uses ThreadPoolExecutor instead of ProcessPoolExecutor to avoid
+        fork-related memory duplication. Numpy operations release the GIL, so
+        threads achieve real parallelism for the heavy compute (KD-tree, L2).
 
         Args:
             descriptors: All descriptors
@@ -287,11 +292,12 @@ class TripletMiner:
         Returns:
             List of triplets
         """
+        from concurrent.futures import ThreadPoolExecutor
+
         if n_workers is None:
-            # Limit to 8 workers to avoid memory issues with large datasets
             n_workers = min(len(unique_seqs), 8)
 
-        logging.info(f"Mining triplets in PARALLEL ({len(unique_seqs)} sequences, {n_workers} workers)...")
+        logging.info(f"Mining triplets in PARALLEL ({len(unique_seqs)} sequences, {n_workers} thread workers)...")
 
         # Prepare arguments for each sequence (only pass sequence-specific data)
         args_list = []
@@ -320,11 +326,11 @@ class TripletMiner:
                 self.metric
             ))
 
-        # Execute in parallel
+        # Execute in parallel using threads (numpy releases GIL)
         all_triplets = []
         start_time = time.perf_counter()
 
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
             results = list(executor.map(_mine_sequence_worker, args_list))
 
         for seq_id, triplets in results:
@@ -697,6 +703,107 @@ class TripletMiner:
 
         else:
             raise ValueError(f"Unknown mining strategy: {self.mining_strategy}")
+
+
+def mine_pos_neg_lists(
+    descriptors: np.ndarray,
+    poses: np.ndarray,
+    sequence_ids: np.ndarray,
+    pos_dist_max: float = 5.0,
+    neg_dist_min: float = 10.0,
+    temporal_min: int = 30,
+    n_neg_per_anchor: int = 32,
+    metric: str = 'l2',
+) -> Tuple[np.ndarray, dict, dict]:
+    """Mine positive/negative pools per anchor for SmoothAP training.
+
+    For each anchor, returns:
+    - All same-sequence positives (pose_dist < pos_dist_max, |i-j| >= temporal_min)
+    - Top-N hardest negatives (pose_dist > neg_dist_min, smallest descriptor distance)
+
+    Cross-sequence pairs are not connected (poses live in sequence-local frames).
+
+    Args:
+        descriptors: (N, D) raw descriptors (used for hard negative ranking).
+        poses: (N, 4, 4) SE(3) poses.
+        sequence_ids: (N,) sequence ID per node.
+        pos_dist_max: Same-place threshold (meters).
+        neg_dist_min: Different-place threshold (meters).
+        temporal_min: Minimum frame gap to consider as revisit.
+        n_neg_per_anchor: Hard negatives kept per anchor.
+        metric: 'l2' descriptor distance for hard negative selection.
+
+    Returns:
+        anchors: array of anchor indices that have at least 1 positive.
+        pos_pool: dict {anchor_idx: np.array of positive indices (variable length)}
+        neg_pool: dict {anchor_idx: np.array of (top-N hard) negative indices (length n_neg_per_anchor or less)}
+    """
+    pos_pool = {}
+    neg_pool = {}
+    valid_anchors = []
+
+    positions = poses[:, :3, 3]
+    unique_seqs = np.unique(sequence_ids)
+
+    for seq_id in unique_seqs:
+        seq_mask = sequence_ids == seq_id
+        seq_indices = np.where(seq_mask)[0]
+        n_seq = len(seq_indices)
+        if n_seq < 3:
+            continue
+
+        seq_positions = positions[seq_indices]
+        seq_descriptors = descriptors[seq_indices]
+        tree = cKDTree(seq_positions)
+        all_local = np.arange(n_seq)
+
+        # Vectorized neighbor queries
+        pos_candidates_all = tree.query_ball_tree(tree, r=pos_dist_max)
+        too_close_all = tree.query_ball_tree(tree, r=neg_dist_min)
+
+        for local_anchor in range(n_seq):
+            global_anchor = int(seq_indices[local_anchor])
+
+            # Positives: pos_dist < pos_dist_max, frame_gap >= temporal_min, exclude self
+            pos_local = np.array(pos_candidates_all[local_anchor], dtype=np.int64)
+            if len(pos_local) == 0:
+                continue
+            tgaps = np.abs(pos_local - local_anchor)
+            keep = (pos_local != local_anchor) & (tgaps >= temporal_min)
+            pos_local = pos_local[keep]
+            if len(pos_local) == 0:
+                continue
+
+            # Negatives: pose_dist > neg_dist_min, frame_gap >= temporal_min
+            tc_arr = np.array(too_close_all[local_anchor], dtype=np.int64)
+            tc_mask = np.zeros(n_seq, dtype=bool)
+            tc_mask[tc_arr] = True
+            neg_temporal = np.abs(all_local - local_anchor) >= temporal_min
+            neg_mask = neg_temporal & ~tc_mask
+            neg_mask[local_anchor] = False
+            negative_local = np.where(neg_mask)[0]
+            if len(negative_local) == 0:
+                continue
+
+            # Top-N hardest negatives by descriptor L2
+            anchor_desc = seq_descriptors[local_anchor]
+            neg_descs = seq_descriptors[negative_local]
+            if metric == 'l2':
+                d2 = np.sum((neg_descs - anchor_desc[None, :]) ** 2, axis=1)
+            else:
+                # Fallback: random
+                d2 = np.random.rand(len(negative_local))
+            top = min(n_neg_per_anchor, len(negative_local))
+            top_local = negative_local[np.argsort(d2)[:top]]
+
+            pos_global = seq_indices[pos_local].astype(np.int64)
+            neg_global = seq_indices[top_local].astype(np.int64)
+
+            pos_pool[global_anchor] = pos_global
+            neg_pool[global_anchor] = neg_global
+            valid_anchors.append(global_anchor)
+
+    return np.array(valid_anchors, dtype=np.int64), pos_pool, neg_pool
 
 
 class BatchTripletMiner:
