@@ -45,3 +45,12 @@ Thumbs.db
 
 # Project-specific
 CLAUDE.md
+
+# Bundled checkpoints (paper reproduction) — keep tracked despite *.pth above
+# Pattern: un-ignore directory, re-ignore contents, then un-ignore specific file
+!results/ctx128_cosine_bayesian/
+results/ctx128_cosine_bayesian/*
+!results/ctx128_cosine_bayesian/best_model.pth
+!baselines/weights/
+baselines/weights/*
+!baselines/weights/bevplace_finetune.pth

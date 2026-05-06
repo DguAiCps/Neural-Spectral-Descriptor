@@ -200,6 +200,42 @@ Neural-Spectral-Codec/
 | n_epochs | 100 | Training epochs (best 80–95) |
 | patience | 10 | Early stopping epochs |
 
+## Bundled checkpoints
+
+The repository ships two checkpoints used in the paper so that evaluation and Appendix M analyses can be run without re-training:
+
+| Path | Size | Description |
+|------|------|-------------|
+| [`results/ctx128_cosine_bayesian/best_model.pth`](results/ctx128_cosine_bayesian/best_model.pth) | 2.3 MB | Paper-canonical NSD checkpoint (epoch 92, best val R@1 = 0.7244, seed 42 of the 3-seed bootstrap in Appendix L). 194,344 parameters total. |
+| [`baselines/weights/bevplace_finetune.pth`](baselines/weights/bevplace_finetune.pth) | 5.3 MB | BEVPlace++ multi-sensor fine-tuned checkpoint (paper Appendix M; 5 epochs / 50 min on RTX 5080 from the official KITTI checkpoint). |
+
+The official BEVPlace++ KITTI checkpoint (`bevplace_kitti.pth.tar`, ~16 MB) is **not bundled** (third-party release). To run the BEVPlace++ released-as-is comparison or rerun the multi-sensor fine-tune from scratch, download it from the official repo:
+
+```bash
+# https://github.com/zjuluolun/BEVPlace2 — see authors' README for the latest download link
+mkdir -p baselines/weights
+curl -L -o baselines/weights/bevplace_kitti.pth.tar <URL_FROM_BEVPLACE2_REPO>
+# or set NSD_BEVPLACE_WEIGHTS environment variable to point at any local copy
+```
+
+Datasets (KITTI / NCLT / HeLiPR / MulRan) are publicly available; download instructions are in each dataset's official site (no scraping). Pre-computed FFT/descriptor caches under `data/preprocessed/` are auto-generated on first training run (~15 GB total).
+
+## Inference / paper-Table-2 evaluation (no training)
+
+```bash
+# Validate using the bundled NSD checkpoint
+python train_multi_dataset.py \
+  --config configs/training_multi_dataset.yaml \
+  --checkpoint-dir results/ctx128_cosine_bayesian/ \
+  --validate-only
+
+# Run all baselines (Table 2: SC++, M2DP, FreSCo, LiDAR-Iris, BEVPlace++ ms-ft)
+python baselines/evaluate_baselines.py --config configs/training_multi_dataset.yaml
+
+# Rotation invariance (Table 3)
+python baselines/evaluate_rotation_invariance.py --cache-key 056e0a02
+```
+
 ## Reproducing Paper Results
 
 ```bash
@@ -220,7 +256,7 @@ python scripts/compute_yaw_recall.py --output results/yaw_recall.json
 # KITTI 08 failure decomposition (Appendix K)
 python scripts/analyze_kitti08_failure.py
 
-# BEVPlace++ multi-sensor fine-tuning (Appendix M)
+# BEVPlace++ multi-sensor fine-tuning (Appendix M; ~50 min on RTX 5080)
 python scripts/finetune_bevplace.py --config configs/training_multi_dataset.yaml --epochs 5
 ```
 
