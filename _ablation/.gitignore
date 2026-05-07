@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Training outputs
+logs/
+outputs/
+results/*
+checkpoints/
+
+# Baseline pretrained weights (download separately, not vendored)
+baselines/weights/
+**/checkpoints/
+**/checkpoints_v2/
+docs/
+*.pth
+*.pt
+
+# Data
+data/
+*.bin
+*.h5
+*.hdf5
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+*.tmp
+*.temp
+.claude/
+
+# Project-specific
+CLAUDE.md
+
+# Bundled checkpoints (paper-reproducible) — tracked despite *.pth above
+!_handoff/
+!_handoff/nsd_encoder_ablation_checkpoints/
+!_handoff/nsd_encoder_ablation_checkpoints/*.pth
+!_handoff/nsd_encoder_ablation_remote_results/
+!_handoff/nsd_encoder_ablation_remote_results/*.json
+!results/ablation_no_interdiff_gate_seed42/
+results/ablation_no_interdiff_gate_seed42/*
+!results/ablation_no_interdiff_gate_seed42/best_model.pth

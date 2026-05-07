@@ -12,7 +12,7 @@ build/
 # Training outputs
 logs/
 outputs/
-results/
+/results/
 checkpoints/
 
 # Baseline pretrained weights (download separately, not vendored)
@@ -54,3 +54,17 @@ results/ctx128_cosine_bayesian/*
 !baselines/weights/
 baselines/weights/*
 !baselines/weights/bevplace_finetune.pth
+
+# _ablation: encoder-preset + gated GAT + phase rerank ablation tree
+# Skip transient / derived data (preprocessed caches, logs, intermediate ckpts)
+_ablation/data/
+_ablation/logs/
+_ablation/results/*/checkpoint_epoch_*.pth
+_ablation/results/*/final_model.pth
+_ablation/results/*/similarity_dist.npz
+# Keep the multi-sensor ablation best checkpoint (paper-reproducible)
+!_ablation/results/ablation_no_interdiff_gate_seed42/
+_ablation/results/ablation_no_interdiff_gate_seed42/*
+!_ablation/results/ablation_no_interdiff_gate_seed42/best_model.pth
+# Keep professor's handoff checkpoints (KITTI-only baselines, ~4 MB total)
+!_ablation/_handoff/
