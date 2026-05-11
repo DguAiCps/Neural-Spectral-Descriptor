@@ -1,25 +1,31 @@
-# KITTI-only configuration for urgent execution/debug experiments.
-# Uses the same encoder/GNN dimensions as the paper config (544D raw + 128D ctx).
+# Fast multi-dataset phase-aware DiffGAT.
+# Output dim: 288D encoder + 128D GAT context + 360D BEV cross-phase = 776D.
+# This is the practical follow-up to the KITTI-only phase identity result:
+# phase is part of the NSD descriptor, not an external SC++ reranker.
 
 data:
   lazy_load: true
-  cache_dir: data/preprocessed_kitti
+  cache_dir: data/preprocessed_kitti_nclt_phase_identity_fast
   datasets:
     train:
       - type: kitti
         root: /rise/RISE1/workspace/data/kitti/dataset
         sequences: ['01', '02', '06', '07']
         weight: 1.0
+      - type: nclt
+        root: /rise/RISE1/workspace/data/nclt
+        sequences: ['2012-05-11']
+        weight: 1.0
     val:
       - type: kitti
         root: /rise/RISE1/workspace/data/kitti/dataset
         sequences: ['00', '05', '08']
         weight: 1.0
-    test:
-      - type: kitti
-        root: /rise/RISE1/workspace/data/kitti/dataset
-        sequences: ['09', '10']
+      - type: nclt
+        root: /rise/RISE1/workspace/data/nclt
+        sequences: ['2012-01-08', '2013-01-10']
         weight: 1.0
+    test: []
 
 encoding:
   projection_type: 'range_image'
@@ -31,6 +37,7 @@ encoding:
   target_elevation_bins: 16
   sensor_elevation_ranges:
     kitti: [-24.8, 2.0]
+    nclt: [-30.67, 10.67]
   bev:
     z_min: -3.0
     height_encoding: 'iris'
@@ -42,37 +49,30 @@ encoding:
   learnable_alpha: true
   epsilon: 1.0e-08
   bin_statistics: ['mean', 'std']
-  inter_bin_statistics: ['diff']
+  inter_bin_statistics: []
   zero_center: false
   log_magnitude: false
   normalize_channels: false
   spectral_policy:
-    enabled: true
-    type: 'soft_binning'
-    output_dim: 544
-    shared_across_rings: false
-    soft_binning:
-      n_soft_bins: 9
-      stats: ['mean', 'std']
-      inter_stats: ['diff']
-      init_mode: 'octave'
-      alpha: 2.0
-    linear:
-      d_per_ring: 14
-    conv1d:
-      channels_per_group: 2
-      kernel_size: 7
-    attention:
-      n_queries: 7
-      n_heads: 2
-      head_dim: 32
-      d_pe: 16
-    gated:
-      gate_hidden: 64
-    lr_scale: 0.1
-    warmup_epochs: 3
+    enabled: false
+  cross_spectrum:
+    enabled: false
+    n_freqs: 0
+  phase_features:
+    source: 'bev_cross'
+    layout_sectors: 60
+    bev_rows: 16
+    bev_freqs: 12
+    range_rows: 16
+    range_freqs: 0
+    bev_height_encoding: 'max'
+    bev_height_layers: 8
+    bev_min_range: 1.0
+    bev_max_range: 80.0
+    bev_z_min: -3.0
+    bev_z_max: 5.0
   quantization_bits: 16
-  descriptor_size: 544
+  descriptor_size: 288
 
 keyframe:
   distance_threshold: 0.8
@@ -107,15 +107,38 @@ keyframe:
       refine_space: 'ctx'
     use_pose_gt_edges: false
     pose_gt_edge_max_k: 10
+    phase_edges:
+      enabled: true
+      max_k: 3
+      min_similarity: 0.35
+      temporal_exclude: 30
 
 gnn:
-  input_dim: 544
+  input_dim: 288
   hidden_dim: 128
   context_dim: 128
-  use_residual_gate: false
+  use_residual_gate: true
   gate_hidden_dim: 64
+  gate_initial_alpha: 0.0625
   use_edge_confidence_gate: false
   edge_gate_hidden_dim: 16
+  phase_token:
+    enabled: true
+    input_dim: 360
+    token_dim: 360
+    hidden_dim: 256
+    mode: identity
+    initial_alpha: 0.5
+    dropout: 0.1
+  phase_edge:
+    enabled: true
+    input_dim: 360
+    key_dim: 48
+    hidden_dim: 96
+    max_logit: 3.0
+    value_scale: 0.5
+    similarity_only: true
+    dropout: 0.1
   n_layers: 2
   n_heads: 4
   dropout: 0.1
@@ -130,7 +153,7 @@ gnn:
   local_update_hops: 3
   use_local_updates: true
   use_multi_gpu: false
-  patience: 10
+  patience: 8
 
 retrieval:
   top_k: 10
@@ -153,15 +176,15 @@ system:
 
 logging:
   use_wandb: false
-  wandb_project: neural-spectral-codec-kitti
+  wandb_project: neural-spectral-codec-kitti-nclt-phase-fast
   wandb_entity: null
   log_interval: 10
   save_interval: 1000
 
 training:
-  resume_from_checkpoint: results/ctx128_cosine_bayesian/best_model.pth
-  n_epochs: 60
-  learning_rate: 5.0e-04
+  resume_from_checkpoint: null
+  n_epochs: 30
+  learning_rate: 3.0e-04
   weight_decay: 1.0e-05
   temperature: 0.1
   log_interval: 10
@@ -170,8 +193,8 @@ training:
   validate_every_n_epochs: 2
   loss_type: 'infonce'
   temperature_schedule:
-    enabled: false
-    start: 0.5
+    enabled: true
+    start: 0.2
     end: 0.05
   smoothap:
     tau: 0.05
@@ -179,6 +202,11 @@ training:
     n_neg: 256
     batch_anchors: 32
   edge_aux_lambda: 0.0
+  phase_edge_aux_lambda: 0.20
+  phase_edge_aux_balance: true
+  phase_edge_aux_focal_gamma: 0.0
+  context_aux_lambda: 0.0
+  phase_token_aux_lambda: 0.0
 
 triplet:
   positive_distance_max: 5.0

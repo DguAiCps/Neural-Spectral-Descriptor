@@ -130,6 +130,8 @@ class SpectralEncoder(nn.Module):
         self.interpolate_empty = interpolate_empty
         self._device = device
         self.projection_type = projection_type
+        self.bev_n_channels = 3 if projection_type == 'bev' and height_encoding == 'physics3' else 1
+        self.bev_n_channels = 3 if projection_type == 'bev' and height_encoding == 'physics3' else 1
         self.zero_center = zero_center
         self.log_magnitude = log_magnitude
         self.cross_spectrum_enabled = cross_spectrum_enabled
@@ -456,7 +458,9 @@ class SpectralEncoder(nn.Module):
         # Interpolate empty pixels for clean FFT
         if self.interpolate_empty:
             if self.projection_type == 'bev':
-                image_2d = interpolate_bev_image(image_2d, method='linear')
+                image_2d = interpolate_bev_image(
+                    image_2d, method='linear', n_channels=self.bev_n_channels
+                )
             else:
                 image_2d = interpolate_range_image(image_2d, method='linear')
 
@@ -482,7 +486,9 @@ class SpectralEncoder(nn.Module):
         image_2d, _ = self.projector.project(points, keep_intensity=False)
         if self.interpolate_empty:
             if self.projection_type == 'bev':
-                image_2d = interpolate_bev_image(image_2d, method='linear')
+                image_2d = interpolate_bev_image(
+                    image_2d, method='linear', n_channels=self.bev_n_channels
+                )
             else:
                 image_2d = interpolate_range_image(image_2d, method='linear')
 
@@ -803,7 +809,9 @@ class SpectralEncoderNumpy:
         """
         image_2d, _ = self.projector.project(points, keep_intensity=False)
         if self.projection_type == 'bev':
-            image_2d = interpolate_bev_image(image_2d, method='linear')
+            image_2d = interpolate_bev_image(
+                image_2d, method='linear', n_channels=self.bev_n_channels
+            )
         else:
             image_2d = interpolate_range_image(image_2d, method='linear')
         return self.encode_range_image(image_2d, return_entropy=return_entropy)
@@ -820,7 +828,9 @@ class SpectralEncoderNumpy:
         """
         image_2d, _ = self.projector.project(points, keep_intensity=False)
         if self.projection_type == 'bev':
-            image_2d = interpolate_bev_image(image_2d, method='linear')
+            image_2d = interpolate_bev_image(
+                image_2d, method='linear', n_channels=self.bev_n_channels
+            )
         else:
             image_2d = interpolate_range_image(image_2d, method='linear')
 

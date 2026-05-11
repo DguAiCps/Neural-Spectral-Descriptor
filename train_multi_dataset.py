@@ -195,6 +195,58 @@ def get_elevation_range(config, dataset_type):
     return tuple(config['encoding']['elevation_range'])
 
 
+SENSOR_ID_BY_DATASET = {
+    'kitti': 0,
+    'nclt': 1,
+    'helipr': 2,
+    'mulran': 3,
+}
+
+BEAM_COUNT_BY_DATASET = {
+    'kitti': 64.0,
+    'mulran': 64.0,
+    'nclt': 32.0,
+    'helipr': 16.0,
+}
+
+
+def get_sensor_id(dataset_type):
+    """Stable sensor id used by the sensor-aware GAT gate."""
+    return SENSOR_ID_BY_DATASET.get(dataset_type, len(SENSOR_ID_BY_DATASET))
+
+
+def get_beam_count(dataset_type):
+    """Approximate vertical beam count used as continuous fallback metadata."""
+    return BEAM_COUNT_BY_DATASET.get(dataset_type, 64.0)
+
+
+def get_sensor_similarity_k(graph_config, dataset_type, default_max_k, default_min_k):
+    """Return per-dataset similarity k values, falling back to scalar config.
+
+    YAML format:
+      keyframe:
+        graph:
+          sensor_similarity:
+            enabled: true
+            kitti:  {max_k: 10, min_k: 0}
+            nclt:   {max_k: 16, min_k: 4}
+            helipr: {max_k: 24, min_k: 6}
+            mulran: {max_k: 12, min_k: 2}
+    """
+    cfg = graph_config.get('sensor_similarity', {})
+    if not cfg or not cfg.get('enabled', False):
+        return int(default_max_k), int(default_min_k)
+    entry = cfg.get(dataset_type, {})
+    return int(entry.get('max_k', default_max_k)), int(entry.get('min_k', default_min_k))
+
+
+def attach_sensor_metadata(graph, sensor_ids, beam_counts, device):
+    """Attach per-node sensor metadata consumed by sensor-aware GAT gate."""
+    graph.sensor_id = torch.as_tensor(sensor_ids, dtype=torch.long, device=device).reshape(-1)
+    graph.beam_count = torch.as_tensor(beam_counts, dtype=torch.float32, device=device).reshape(-1, 1)
+    return graph
+
+
 def compute_cache_key(config, dataset_type=None):
     """
     Compute SHA256 hash from encoding + keyframe config for cache invalidation.
@@ -222,6 +274,7 @@ def compute_cache_key(config, dataset_type=None):
         'normalize_channels': enc.get('normalize_channels', True),
         'spectral_policy_enabled': enc.get('spectral_policy', {}).get('enabled', False),
         'cross_spectrum': enc.get('cross_spectrum', {}),
+        'phase_features': enc.get('phase_features', {}),
     }
     # Alpha affects bin edges for exponential strategy (octave ignores it)
     if key_params['binning_strategy'] != 'octave':
@@ -281,6 +334,9 @@ def save_keyframes_cache(path, keyframes):
     if keyframes[0].fft_magnitudes is not None:
         fft_mags = np.array([kf.fft_magnitudes for kf in keyframes])
         save_dict['fft_magnitudes'] = fft_mags
+    if keyframes[0].phase_features is not None:
+        phase_features = np.array([kf.phase_features for kf in keyframes])
+        save_dict['phase_features'] = phase_features
     np.savez(path, **save_dict)
     logging.info(f"  Saved cache: {path} ({len(keyframes)} keyframes)")
 
@@ -297,6 +353,7 @@ def load_keyframes_cache(path):
         keyframe_ids = data['keyframe_ids']
         entropies = data['spectral_entropies'] if 'spectral_entropies' in data else None
         fft_mags = data['fft_magnitudes'] if 'fft_magnitudes' in data else None
+        phase_features = data['phase_features'] if 'phase_features' in data else None
 
         keyframes = []
         for i in range(len(scan_ids)):
@@ -309,13 +366,15 @@ def load_keyframes_cache(path):
                 descriptor=descriptors[i],
                 spectral_entropy=float(entropies[i]) if entropies is not None else None,
                 fft_magnitudes=fft_mags[i] if fft_mags is not None else None,
+                phase_features=phase_features[i] if phase_features is not None else None,
             )
             keyframes.append(kf)
         return keyframes
 
 
 def process_dataset(loader, encoder, keyframe_selector, device, max_scans=None, dataset_name="",
-                    compute_fft_magnitudes=False):
+                    compute_fft_magnitudes=False, compute_phase_features=False,
+                    phase_feature_config=None):
     """Process dataset and extract keyframes with profiling"""
     keyframes = []
     num_scans = len(loader) if max_scans is None else min(len(loader), max_scans)
@@ -368,6 +427,15 @@ def process_dataset(loader, encoder, keyframe_selector, device, max_scans=None, 
                 # Compute FFT magnitudes for spectral policy (before discarding points)
                 if compute_fft_magnitudes:
                     keyframe.fft_magnitudes = encoder.compute_fft_magnitudes(data['points'])
+
+                # Compute low-frequency phase inputs for the learned phase token.
+                if compute_phase_features:
+                    from encoding.phase_features import compute_phase_features_from_points
+                    keyframe.phase_features = compute_phase_features_from_points(
+                        data['points'],
+                        encoder,
+                        phase_feature_config or {},
+                    )
 
                 # Memory optimization: Discard point cloud after encoding
                 # Points are only needed for encoding, not for GNN training
@@ -543,6 +611,93 @@ def main():
     # Check if spectral policy is enabled (need FFT magnitudes in cache)
     policy_config = config['encoding'].get('spectral_policy', {})
     need_fft_magnitudes = policy_config.get('enabled', False)
+    phase_feature_config = config['encoding'].get('phase_features', {})
+    phase_token_config = config['gnn'].get('phase_token', {})
+    phase_edge_config = config['gnn'].get('phase_edge', {})
+    phase_alignment_config = config['gnn'].get('phase_alignment_edge', {})
+    phase_coherence_config = config['gnn'].get('phase_coherence', {})
+    dual_stream_config = config['gnn'].get('dual_stream', {})
+    need_phase_features = (
+        phase_token_config.get('enabled', False)
+        or phase_edge_config.get('enabled', False)
+        or phase_alignment_config.get('enabled', False)
+        or phase_coherence_config.get('enabled', False)
+        or dual_stream_config.get('enabled', False)
+    )
+    if need_phase_features:
+        from encoding.phase_features import (
+            phase_feature_dim,
+            prepare_raw_complex_phase_config,
+        )
+        raw_complex_consumers = {
+            'phase_alignment_edge': phase_alignment_config,
+            'phase_coherence': phase_coherence_config,
+            'dual_stream': dual_stream_config,
+        }
+        if any(cfg.get('enabled', False) for cfg in raw_complex_consumers.values()):
+            phase_feature_config = prepare_raw_complex_phase_config(
+                phase_feature_config,
+                raw_complex_consumers,
+            )
+            config['encoding']['phase_features'] = phase_feature_config
+            logging.info(
+                "  Raw complex phase features enabled: "
+                f"source={phase_feature_config.get('source')}, "
+                f"dim={phase_feature_dim(phase_feature_config)}"
+            )
+        computed_phase_dim = phase_feature_dim(phase_feature_config)
+        if phase_token_config.get('enabled', False):
+            phase_token_config['input_dim'] = phase_token_config.get(
+                'input_dim',
+                computed_phase_dim,
+            )
+            config['gnn']['phase_token'] = phase_token_config
+            logging.info(
+                "  Learned phase token enabled: "
+                f"source={phase_feature_config.get('source', 'bev_complex')}, "
+                f"input_dim={phase_token_config['input_dim']}, "
+                f"token_dim={phase_token_config.get('token_dim', 64)}"
+            )
+        if phase_edge_config.get('enabled', False):
+            phase_edge_config['input_dim'] = phase_edge_config.get(
+                'input_dim',
+                computed_phase_dim,
+            )
+            config['gnn']['phase_edge'] = phase_edge_config
+            logging.info(
+                "  Phase-aware GAT edge bias enabled: "
+                f"source={phase_feature_config.get('source', 'bev_complex')}, "
+                f"input_dim={phase_edge_config['input_dim']}, "
+                f"key_dim={phase_edge_config.get('key_dim', 32)}, "
+                f"max_logit={phase_edge_config.get('max_logit', 2.0)}"
+            )
+        if phase_alignment_config.get('enabled', False):
+            phase_alignment_config['n_rows'] = int(
+                phase_alignment_config.get(
+                    'n_rows',
+                    phase_feature_config.get('bev_rows', phase_feature_config.get('range_rows', 16)),
+                )
+            )
+            phase_alignment_config['n_freqs'] = int(
+                phase_alignment_config.get(
+                    'n_freqs',
+                    phase_feature_config.get('bev_freqs', phase_feature_config.get('range_freqs', 0)),
+                )
+            )
+            phase_alignment_config['n_sectors'] = int(
+                phase_alignment_config.get(
+                    'n_sectors',
+                    phase_feature_config.get('layout_sectors', config['encoding'].get('n_azimuth', 360)),
+                )
+            )
+            config['gnn']['phase_alignment_edge'] = phase_alignment_config
+            logging.info(
+                "  Phase-alignment edge features enabled: "
+                f"shape=({phase_alignment_config['n_rows']}, {phase_alignment_config['n_freqs']}), "
+                f"n_sectors={phase_alignment_config['n_sectors']}, "
+                f"include_score={phase_alignment_config.get('include_score', False)}, "
+                f"value_scale={phase_alignment_config.get('value_scale', 0.0)}"
+            )
 
     # Create keyframe selector
     from keyframe.selector import KeyframeSelector
@@ -567,6 +722,9 @@ def main():
     train_datasets = config['data']['datasets']['train']
     all_train_keyframes = []
     train_sequence_ids = []
+    train_sensor_ids = []
+    train_beam_counts = []
+    train_dataset_types = []
     current_seq_id = 0
 
     with profiler.profile('load_train_data'):
@@ -596,12 +754,17 @@ def main():
                         keyframes = process_dataset(
                             loader, encoder, keyframe_selector, device,
                             dataset_name=ds_name,
-                            compute_fft_magnitudes=need_fft_magnitudes
+                            compute_fft_magnitudes=need_fft_magnitudes,
+                            compute_phase_features=need_phase_features,
+                            phase_feature_config=phase_feature_config,
                         )
                         save_keyframes_cache(cache_path, keyframes)
                         del loader  # Free loader memory
                     all_train_keyframes.extend(keyframes)
                     train_sequence_ids.extend([current_seq_id] * len(keyframes))
+                    train_sensor_ids.extend([get_sensor_id(dataset_type)] * len(keyframes))
+                    train_beam_counts.extend([get_beam_count(dataset_type)] * len(keyframes))
+                    train_dataset_types.extend([dataset_type] * len(keyframes))
                     del keyframes  # Free temporary keyframes list
                     mem_mb = get_memory_usage_mb()
                     logging.info(f"    Sequence {seq}: seq_id={current_seq_id}, total_keyframes={len(all_train_keyframes)}, RAM={mem_mb:.0f}MB")
@@ -621,12 +784,17 @@ def main():
                         keyframes = process_dataset(
                             loader, encoder, keyframe_selector, device,
                             dataset_name=ds_name,
-                            compute_fft_magnitudes=need_fft_magnitudes
+                            compute_fft_magnitudes=need_fft_magnitudes,
+                            compute_phase_features=need_phase_features,
+                            phase_feature_config=phase_feature_config,
                         )
                         save_keyframes_cache(cache_path, keyframes)
                         del loader  # Free loader memory
                     all_train_keyframes.extend(keyframes)
                     train_sequence_ids.extend([current_seq_id] * len(keyframes))
+                    train_sensor_ids.extend([get_sensor_id(dataset_type)] * len(keyframes))
+                    train_beam_counts.extend([get_beam_count(dataset_type)] * len(keyframes))
+                    train_dataset_types.extend([dataset_type] * len(keyframes))
                     del keyframes  # Free temporary keyframes list
                     mem_mb = get_memory_usage_mb()
                     logging.info(f"    Date {date}: seq_id={current_seq_id}, total_keyframes={len(all_train_keyframes)}, RAM={mem_mb:.0f}MB")
@@ -648,7 +816,9 @@ def main():
                             keyframes = process_dataset(
                                 loader, encoder, keyframe_selector, device,
                                 dataset_name=ds_name,
-                                compute_fft_magnitudes=need_fft_magnitudes
+                                compute_fft_magnitudes=need_fft_magnitudes,
+                                compute_phase_features=need_phase_features,
+                                phase_feature_config=phase_feature_config,
                             )
                             save_keyframes_cache(cache_path, keyframes)
                             del loader  # Free loader memory
@@ -658,6 +828,9 @@ def main():
                             continue
                     all_train_keyframes.extend(keyframes)
                     train_sequence_ids.extend([current_seq_id] * len(keyframes))
+                    train_sensor_ids.extend([get_sensor_id(dataset_type)] * len(keyframes))
+                    train_beam_counts.extend([get_beam_count(dataset_type)] * len(keyframes))
+                    train_dataset_types.extend([dataset_type] * len(keyframes))
                     del keyframes  # Free temporary keyframes list
                     mem_mb = get_memory_usage_mb()
                     logging.info(f"    Sequence {seq}: seq_id={current_seq_id}, total_keyframes={len(all_train_keyframes)}, RAM={mem_mb:.0f}MB")
@@ -678,7 +851,9 @@ def main():
                             keyframes = process_dataset(
                                 loader, encoder, keyframe_selector, device,
                                 dataset_name=ds_name,
-                                compute_fft_magnitudes=need_fft_magnitudes
+                                compute_fft_magnitudes=need_fft_magnitudes,
+                                compute_phase_features=need_phase_features,
+                                phase_feature_config=phase_feature_config,
                             )
                             save_keyframes_cache(cache_path, keyframes)
                             del loader  # Free loader memory
@@ -688,6 +863,9 @@ def main():
                             continue
                     all_train_keyframes.extend(keyframes)
                     train_sequence_ids.extend([current_seq_id] * len(keyframes))
+                    train_sensor_ids.extend([get_sensor_id(dataset_type)] * len(keyframes))
+                    train_beam_counts.extend([get_beam_count(dataset_type)] * len(keyframes))
+                    train_dataset_types.extend([dataset_type] * len(keyframes))
                     del keyframes  # Free temporary keyframes list
                     mem_mb = get_memory_usage_mb()
                     logging.info(f"    Sequence {seq}: seq_id={current_seq_id}, total_keyframes={len(all_train_keyframes)}, RAM={mem_mb:.0f}MB")
@@ -697,6 +875,21 @@ def main():
     gc.collect()
 
     train_sequence_ids = np.array(train_sequence_ids)
+    train_sensor_ids = np.array(train_sensor_ids, dtype=np.int64)
+    train_beam_counts = np.array(train_beam_counts, dtype=np.float32)
+    if not (
+        len(all_train_keyframes)
+        == len(train_sequence_ids)
+        == len(train_sensor_ids)
+        == len(train_beam_counts)
+        == len(train_dataset_types)
+    ):
+        raise RuntimeError(
+            "Training metadata length mismatch: "
+            f"keyframes={len(all_train_keyframes)}, seq_ids={len(train_sequence_ids)}, "
+            f"sensor_ids={len(train_sensor_ids)}, beam_counts={len(train_beam_counts)}, "
+            f"dataset_types={len(train_dataset_types)}"
+        )
     logging.info(f"Total training keyframes: {len(all_train_keyframes)} across {current_seq_id} sequences")
 
     # ========================================================================
@@ -735,11 +928,16 @@ def main():
                         keyframes = process_dataset(
                             loader, encoder, keyframe_selector, device,
                             dataset_name=ds_name,
-                            compute_fft_magnitudes=need_fft_magnitudes
+                            compute_fft_magnitudes=need_fft_magnitudes,
+                            compute_phase_features=need_phase_features,
+                            phase_feature_config=phase_feature_config,
                         )
                         save_keyframes_cache(cache_path, keyframes)
                     dataset_name = f"KITTI_{seq}"
-                    val_datasets_info[dataset_name] = {'keyframes': keyframes}
+                    val_datasets_info[dataset_name] = {
+                        'keyframes': keyframes,
+                        'dataset_type': dataset_type,
+                    }
                     logging.info(f"  Validation {dataset_name}: {len(keyframes)} keyframes")
 
             elif dataset_type == 'nclt':
@@ -756,11 +954,16 @@ def main():
                         keyframes = process_dataset(
                             loader, encoder, keyframe_selector, device,
                             dataset_name=ds_name,
-                            compute_fft_magnitudes=need_fft_magnitudes
+                            compute_fft_magnitudes=need_fft_magnitudes,
+                            compute_phase_features=need_phase_features,
+                            phase_feature_config=phase_feature_config,
                         )
                         save_keyframes_cache(cache_path, keyframes)
                     dataset_name = f"NCLT_{date}"
-                    val_datasets_info[dataset_name] = {'keyframes': keyframes}
+                    val_datasets_info[dataset_name] = {
+                        'keyframes': keyframes,
+                        'dataset_type': dataset_type,
+                    }
                     logging.info(f"  Validation {dataset_name}: {len(keyframes)} keyframes")
 
             elif dataset_type == 'helipr':
@@ -779,14 +982,19 @@ def main():
                             keyframes = process_dataset(
                                 loader, encoder, keyframe_selector, device,
                                 dataset_name=ds_name,
-                                compute_fft_magnitudes=need_fft_magnitudes
+                                compute_fft_magnitudes=need_fft_magnitudes,
+                                compute_phase_features=need_phase_features,
+                                phase_feature_config=phase_feature_config,
                             )
                             save_keyframes_cache(cache_path, keyframes)
                         except Exception as e:
                             logging.warning(f"  Failed to load HeLiPR {seq}: {e}")
                             continue
                     dataset_name = f"HeLiPR_{seq}"
-                    val_datasets_info[dataset_name] = {'keyframes': keyframes}
+                    val_datasets_info[dataset_name] = {
+                        'keyframes': keyframes,
+                        'dataset_type': dataset_type,
+                    }
                     logging.info(f"  Validation {dataset_name}: {len(keyframes)} keyframes")
 
             elif dataset_type == 'mulran':
@@ -804,14 +1012,19 @@ def main():
                             keyframes = process_dataset(
                                 loader, encoder, keyframe_selector, device,
                                 dataset_name=ds_name,
-                                compute_fft_magnitudes=need_fft_magnitudes
+                                compute_fft_magnitudes=need_fft_magnitudes,
+                                compute_phase_features=need_phase_features,
+                                phase_feature_config=phase_feature_config,
                             )
                             save_keyframes_cache(cache_path, keyframes)
                         except Exception as e:
                             logging.warning(f"  Failed to load MulRan {seq}: {e}")
                             continue
                     dataset_name = f"MulRan_{seq}"
-                    val_datasets_info[dataset_name] = {'keyframes': keyframes}
+                    val_datasets_info[dataset_name] = {
+                        'keyframes': keyframes,
+                        'dataset_type': dataset_type,
+                    }
                     logging.info(f"  Validation {dataset_name}: {len(keyframes)} keyframes")
 
     total_val_keyframes = sum(len(v['keyframes']) for v in val_datasets_info.values())
@@ -833,6 +1046,23 @@ def main():
     similarity_threshold = graph_config.get('similarity_threshold', 0.993)
     similarity_max_k = graph_config.get('similarity_max_k', 10)
     similarity_min_k = graph_config.get('similarity_min_k', 0)
+    if graph_config.get('sensor_similarity', {}).get('enabled', False):
+        train_similarity_max_k = np.array([
+            get_sensor_similarity_k(graph_config, dt, similarity_max_k, similarity_min_k)[0]
+            for dt in train_dataset_types
+        ], dtype=np.int64)
+        train_similarity_min_k = np.array([
+            get_sensor_similarity_k(graph_config, dt, similarity_max_k, similarity_min_k)[1]
+            for dt in train_dataset_types
+        ], dtype=np.int64)
+        logging.info(
+            "  Sensor-aware similarity k enabled: "
+            f"max_k range=[{train_similarity_max_k.min()}, {train_similarity_max_k.max()}], "
+            f"min_k range=[{train_similarity_min_k.min()}, {train_similarity_min_k.max()}]"
+        )
+    else:
+        train_similarity_max_k = similarity_max_k
+        train_similarity_min_k = similarity_min_k
     similarity_exclude_temporal = graph_config.get('similarity_exclude_temporal', True)
     temporal_edge_mode = graph_config.get('temporal_edge_mode', 'bidirectional')
     temporal_direction_mode = graph_config.get('temporal_direction_mode', 'none')
@@ -991,8 +1221,8 @@ def main():
             poses=train_poses,
             descriptors=initial_descriptors,
             similarity_threshold=similarity_threshold,
-            similarity_max_k=similarity_max_k,
-            similarity_min_k=similarity_min_k,
+            similarity_max_k=train_similarity_max_k,
+            similarity_min_k=train_similarity_min_k,
             similarity_exclude_temporal=similarity_exclude_temporal,
             similarity_dist=similarity_dist,
             spectral_entropies=train_entropies,
@@ -1006,6 +1236,7 @@ def main():
             temporal_direction_mode=temporal_direction_mode,
             **bayesian_config,
         )
+    train_graph = attach_sensor_metadata(train_graph, train_sensor_ids, train_beam_counts, device)
     # Attach ground-truth pose-based similarity edges (train only).
     if use_pose_gt_edges:
         from keyframe.graph_manager import attach_pose_gt_similarity_edges
@@ -1027,6 +1258,28 @@ def main():
         fft_mags = np.array([kf.fft_magnitudes for kf in all_train_keyframes])
         train_graph.x_fft = torch.from_numpy(fft_mags.reshape(len(fft_mags), -1)).float().to(device)
         logging.info(f"  Attached x_fft: {train_graph.x_fft.shape} ({train_graph.x_fft.nbytes / 1e6:.1f} MB)")
+    if need_phase_features:
+        phase_feats = np.array([kf.phase_features for kf in all_train_keyframes])
+        train_graph.x_phase = torch.from_numpy(phase_feats).float().to(device)
+        logging.info(
+            f"  Attached x_phase: {train_graph.x_phase.shape} "
+            f"({train_graph.x_phase.element_size() * train_graph.x_phase.nelement() / 1e6:.1f} MB)"
+        )
+        phase_edges_cfg = graph_config.get('phase_edges', {})
+        if phase_edges_cfg.get('enabled', False):
+            from keyframe.graph_manager import attach_phase_similarity_edges
+            with profiler.profile('attach_phase_edges_train'):
+                train_graph, n_phase_edges = attach_phase_similarity_edges(
+                    train_graph,
+                    phase_feats,
+                    descriptors=train_descriptors,
+                    poses=train_poses,
+                    sequence_ids=train_sequence_ids,
+                    max_k=phase_edges_cfg.get('max_k', 5),
+                    min_similarity=phase_edges_cfg.get('min_similarity', 0.0),
+                    temporal_exclude=phase_edges_cfg.get('temporal_exclude', 30),
+                )
+            logging.info(f"  Phase-neighbor similarity edges attached: {n_phase_edges:,}")
 
     train_graph_time = profiler.get_stats('build_train_graph')['total']
     has_edge_attr = train_graph.edge_attr is not None
@@ -1043,9 +1296,13 @@ def main():
     with profiler.profile('build_val_graphs'):
         for dataset_name, info in val_datasets_info.items():
             keyframes = info['keyframes']
+            dataset_type = info.get('dataset_type', 'kitti')
             poses = np.array([kf.pose for kf in keyframes])
             val_descs = np.array([kf.descriptor for kf in keyframes])
             val_entropies = _extract_entropies(keyframes)
+            val_similarity_max_k, val_similarity_min_k = get_sensor_similarity_k(
+                graph_config, dataset_type, similarity_max_k, similarity_min_k
+            )
             # Two-pass mode OR pose-GT mode: build graph with temporal edges only
             # initially. Pose-GT edges attached afterward below; two-pass refines
             # during training via validate() hook.
@@ -1057,8 +1314,8 @@ def main():
                 poses=poses,
                 descriptors=val_initial_descriptors,
                 similarity_threshold=similarity_threshold,
-                similarity_max_k=similarity_max_k,
-                similarity_min_k=similarity_min_k,
+                similarity_max_k=val_similarity_max_k,
+                similarity_min_k=val_similarity_min_k,
                 similarity_exclude_temporal=similarity_exclude_temporal,
                 similarity_dist=similarity_dist,
                 spectral_entropies=val_entropies,
@@ -1070,6 +1327,12 @@ def main():
                 temporal_edge_mode=temporal_edge_mode,
                 temporal_direction_mode=temporal_direction_mode,
                 **bayesian_config,
+            )
+            graph = attach_sensor_metadata(
+                graph,
+                [get_sensor_id(dataset_type)] * len(keyframes),
+                [get_beam_count(dataset_type)] * len(keyframes),
+                device,
             )
             # Attach pose-GT similarity edges to val graph for upper-bound
             # experiment (train/val structural symmetry). Each val graph holds
@@ -1090,6 +1353,23 @@ def main():
             if need_fft_magnitudes:
                 val_fft = np.array([kf.fft_magnitudes for kf in keyframes])
                 graph.x_fft = torch.from_numpy(val_fft.reshape(len(val_fft), -1)).float().to(device)
+            if need_phase_features:
+                val_phase = np.array([kf.phase_features for kf in keyframes])
+                graph.x_phase = torch.from_numpy(val_phase).float().to(device)
+                phase_edges_cfg = graph_config.get('phase_edges', {})
+                if phase_edges_cfg.get('enabled', False):
+                    from keyframe.graph_manager import attach_phase_similarity_edges
+                    graph, n_val_phase = attach_phase_similarity_edges(
+                        graph,
+                        val_phase,
+                        descriptors=val_descs,
+                        poses=poses,
+                        sequence_ids=None,
+                        max_k=phase_edges_cfg.get('max_k', 5),
+                        min_similarity=phase_edges_cfg.get('min_similarity', 0.0),
+                        temporal_exclude=phase_edges_cfg.get('temporal_exclude', 30),
+                    )
+                    logging.info(f"  {dataset_name} phase-neighbor edges attached: {n_val_phase:,}")
             vt = int((graph.edge_type == 0).sum()) if hasattr(graph, 'edge_type') else 0
             vs = int((graph.edge_type == 1).sum()) if hasattr(graph, 'edge_type') else 0
             logging.info(
@@ -1138,6 +1418,13 @@ def main():
             gate_initial_alpha=config['gnn'].get('gate_initial_alpha', 0.5),
             use_edge_confidence_gate=config['gnn'].get('use_edge_confidence_gate', False),
             edge_gate_hidden_dim=config['gnn'].get('edge_gate_hidden_dim', 16),
+            phase_token_config=config['gnn'].get('phase_token'),
+            phase_edge_config=config['gnn'].get('phase_edge'),
+            phase_alignment_config=config['gnn'].get('phase_alignment_edge'),
+            phase_coherence_config=config['gnn'].get('phase_coherence'),
+            dual_stream_config=config['gnn'].get('dual_stream'),
+            sensor_gate_config=config['gnn'].get('sensor_gate'),
+            diffattn_value_source=config['gnn'].get('diffattn_value_source', 'diff'),
         ).to(device)
 
     # Get effective input_dim (may differ from config if policy overrides it)
@@ -1151,8 +1438,10 @@ def main():
                  f"{config['gnn']['n_layers']} layers, "
                  f"{config['gnn']['hidden_dim']} hidden, {config['gnn']['context_dim']} context, "
                  f"{config['gnn'].get('n_heads', 4)} heads")
-    logging.info(f"  Output: cat(raw_{effective_input_dim}, context_{config['gnn']['context_dim']}) = "
-                 f"{effective_input_dim + config['gnn']['context_dim']}D")
+    phase_dim = config['gnn'].get('phase_token', {}).get('token_dim', 0) if need_phase_features else 0
+    logging.info(f"  Output: cat(raw_{effective_input_dim}, context_{config['gnn']['context_dim']}"
+                 f"{', phase_' + str(phase_dim) if phase_dim else ''}) = "
+                 f"{effective_input_dim + config['gnn']['context_dim'] + phase_dim}D")
 
     # Optional fine-tune initialization. This intentionally loads model weights
     # only, not optimizer/epoch state, so new graph policies can start from the
@@ -1209,6 +1498,16 @@ def main():
         smoothap_n_neg=smoothap_cfg.get('n_neg', 32),
         smoothap_batch_anchors=smoothap_cfg.get('batch_anchors', 64),
         edge_aux_lambda=config['training'].get('edge_aux_lambda', 0.0),
+        phase_edge_aux_lambda=config['training'].get('phase_edge_aux_lambda', 0.0),
+        phase_edge_aux_balance=config['training'].get('phase_edge_aux_balance', False),
+        phase_edge_aux_focal_gamma=config['training'].get('phase_edge_aux_focal_gamma', 0.0),
+        phase_alignment_aux_lambda=config['training'].get('phase_alignment_aux_lambda', 0.0),
+        phase_alignment_aux_balance=config['training'].get('phase_alignment_aux_balance', False),
+        phase_alignment_aux_focal_gamma=config['training'].get('phase_alignment_aux_focal_gamma', 0.0),
+        context_aux_lambda=config['training'].get('context_aux_lambda', 0.0),
+        phase_token_aux_lambda=config['training'].get('phase_token_aux_lambda', 0.0),
+        checkpoint_metric=config['training'].get('checkpoint_metric', 'average_recall@1'),
+        recall_k_values=config['training'].get('recall_k_values', [1, 5, 10]),
     )
 
     # ========================================================================
@@ -1320,6 +1619,7 @@ def main():
                     refine_fit_kwargs=refine_fit_kwargs,
                     refine_edge_kwargs=refine_edge_kwargs,
                     temperature_schedule=training_config.get('temperature_schedule'),
+                    triplet_sampling_config=training_config.get('triplet_sampling'),
                 )
         except Exception as e:
             logging.error(f"Training failed: {e}", exc_info=True)

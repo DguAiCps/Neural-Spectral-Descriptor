@@ -1,19 +1,33 @@
-# KITTI-only configuration for urgent execution/debug experiments.
-# Uses the same encoder/GNN dimensions as the paper config (544D raw + 128D ctx).
+# Server-available subset for the sequential sensor-GAT + physics3 run.
+#
+# The current RISE1 practice server has KITTI and only four NCLT dates:
+#   train: 2012-05-11, 2012-08-04
+#   val:   2012-01-08, 2013-01-10
+# HeLiPR and MulRan are intentionally omitted here because their data roots are
+# absent on the server. Use training_multi_dataset_sensor_gat_absdiff.yaml when
+# the full four-dataset data tree is available.
 
 data:
   lazy_load: true
-  cache_dir: data/preprocessed_kitti
+  cache_dir: data/preprocessed_sensor_gat_absdiff
   datasets:
     train:
       - type: kitti
         root: /rise/RISE1/workspace/data/kitti/dataset
         sequences: ['01', '02', '06', '07']
         weight: 1.0
+      - type: nclt
+        root: /rise/RISE1/workspace/data/nclt
+        sequences: ['2012-05-11', '2012-08-04']
+        weight: 1.0
     val:
       - type: kitti
         root: /rise/RISE1/workspace/data/kitti/dataset
         sequences: ['00', '05', '08']
+        weight: 1.0
+      - type: nclt
+        root: /rise/RISE1/workspace/data/nclt
+        sequences: ['2012-01-08', '2013-01-10']
         weight: 1.0
     test:
       - type: kitti
@@ -31,6 +45,7 @@ encoding:
   target_elevation_bins: 16
   sensor_elevation_ranges:
     kitti: [-24.8, 2.0]
+    nclt: [-30.67, 10.67]
   bev:
     z_min: -3.0
     height_encoding: 'iris'
@@ -39,40 +54,20 @@ encoding:
   binning_strategy: octave
   n_bins: 16
   alpha: 2.0
-  learnable_alpha: true
+  learnable_alpha: false
   epsilon: 1.0e-08
   bin_statistics: ['mean', 'std']
-  inter_bin_statistics: ['diff']
+  inter_bin_statistics: []
   zero_center: false
   log_magnitude: false
   normalize_channels: false
   spectral_policy:
-    enabled: true
-    type: 'soft_binning'
-    output_dim: 544
-    shared_across_rings: false
-    soft_binning:
-      n_soft_bins: 9
-      stats: ['mean', 'std']
-      inter_stats: ['diff']
-      init_mode: 'octave'
-      alpha: 2.0
-    linear:
-      d_per_ring: 14
-    conv1d:
-      channels_per_group: 2
-      kernel_size: 7
-    attention:
-      n_queries: 7
-      n_heads: 2
-      head_dim: 32
-      d_pe: 16
-    gated:
-      gate_hidden: 64
-    lr_scale: 0.1
-    warmup_epochs: 3
+    enabled: false
+  cross_spectrum:
+    enabled: false
+    n_freqs: 0
   quantization_bits: 16
-  descriptor_size: 544
+  descriptor_size: 288
 
 keyframe:
   distance_threshold: 0.8
@@ -97,9 +92,13 @@ keyframe:
     base_prior: 0.01
     density_k: 50
     density_beta: 10.0
-    n_samples: 300000
+    n_samples: 1000000
     prior_signal: 'density'
     multiscale_min_consistency: 0.0
+    sensor_similarity:
+      enabled: true
+      kitti: {max_k: 10, min_k: 0}
+      nclt:  {max_k: 16, min_k: 4}
     two_pass:
       enabled: false
       warmup_epochs: 10
@@ -109,11 +108,20 @@ keyframe:
     pose_gt_edge_max_k: 10
 
 gnn:
-  input_dim: 544
+  input_dim: 288
   hidden_dim: 128
   context_dim: 128
-  use_residual_gate: false
+  use_residual_gate: true
   gate_hidden_dim: 64
+  gate_initial_alpha: 0.0625
+  sensor_gate:
+    enabled: true
+    num_sensors: 4
+    sensor_embed_dim: 8
+    use_beam_count: true
+    beam_embed_dim: 4
+    default_beam_count: 64.0
+  diffattn_value_source: 'abs_diff'
   use_edge_confidence_gate: false
   edge_gate_hidden_dim: 16
   n_layers: 2
@@ -130,7 +138,7 @@ gnn:
   local_update_hops: 3
   use_local_updates: true
   use_multi_gpu: false
-  patience: 10
+  patience: 8
 
 retrieval:
   top_k: 10
@@ -153,15 +161,15 @@ system:
 
 logging:
   use_wandb: false
-  wandb_project: neural-spectral-codec-kitti
+  wandb_project: neural-spectral-codec-server-available-sensor-gat
   wandb_entity: null
   log_interval: 10
   save_interval: 1000
 
 training:
-  resume_from_checkpoint: results/ctx128_cosine_bayesian/best_model.pth
-  n_epochs: 60
-  learning_rate: 5.0e-04
+  resume_from_checkpoint: null
+  n_epochs: 30
+  learning_rate: 3.0e-04
   weight_decay: 1.0e-05
   temperature: 0.1
   log_interval: 10
@@ -170,15 +178,17 @@ training:
   validate_every_n_epochs: 2
   loss_type: 'infonce'
   temperature_schedule:
-    enabled: false
-    start: 0.5
-    end: 0.05
+    enabled: true
+    start: 0.2
+    end: 0.07
   smoothap:
     tau: 0.05
     n_pos: 8
     n_neg: 256
     batch_anchors: 32
   edge_aux_lambda: 0.0
+  phase_edge_aux_lambda: 0.0
+  phase_alignment_aux_lambda: 0.0
 
 triplet:
   positive_distance_max: 5.0

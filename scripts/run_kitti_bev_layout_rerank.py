@@ -79,7 +79,11 @@ def _build_bev_layout_cache(
             print(f"[{sequence}] BEV layout {i}/{len(scan_ids)}", flush=True)
         points = _load_points(velodyne_dir / f"{int(scan_id):06d}.bin")
         bev, _ = projector.project(points, keep_intensity=False)
-        bev = interpolate_bev_image(bev, method="linear")
+        bev = interpolate_bev_image(
+            bev,
+            method="linear",
+            n_channels=3 if height_encoding == "physics3" else 1,
+        )
         layouts.append(bev.astype(np.float32))
 
     bev_layouts = np.asarray(layouts, dtype=np.float32)
@@ -88,19 +92,35 @@ def _build_bev_layout_cache(
     return bev_layouts
 
 
-def _pool_rows(layouts: np.ndarray, n_rows: int, mode: str) -> np.ndarray:
+def _pool_rows(
+    layouts: np.ndarray,
+    n_rows: int,
+    mode: str,
+    n_channels: int = 1,
+) -> np.ndarray:
     if n_rows <= 0 or layouts.shape[1] == n_rows:
         return layouts.astype(np.float32)
-    groups = np.array_split(np.arange(layouts.shape[1]), n_rows)
+    n_channels = max(1, int(n_channels))
+    if layouts.shape[1] % n_channels != 0 or n_rows % n_channels != 0:
+        raise ValueError(
+            f"Cannot channel-pool rows={layouts.shape[1]} to n_rows={n_rows} "
+            f"with n_channels={n_channels}"
+        )
+    rows_per_channel = layouts.shape[1] // n_channels
+    out_rows_per_channel = n_rows // n_channels
     pooled = []
-    for group in groups:
-        chunk = layouts[:, group, :]
-        if mode == "max":
-            pooled.append(chunk.max(axis=1))
-        elif mode == "mean":
-            pooled.append(chunk.mean(axis=1))
-        else:
-            raise ValueError(f"Unknown row pool mode: {mode}")
+    for ch in range(n_channels):
+        start = ch * rows_per_channel
+        end = start + rows_per_channel
+        groups = np.array_split(np.arange(start, end), out_rows_per_channel)
+        for group in groups:
+            chunk = layouts[:, group, :]
+            if mode == "max":
+                pooled.append(chunk.max(axis=1))
+            elif mode == "mean":
+                pooled.append(chunk.mean(axis=1))
+            else:
+                raise ValueError(f"Unknown row pool mode: {mode}")
     return np.stack(pooled, axis=1).astype(np.float32)
 
 
@@ -245,7 +265,7 @@ def main() -> None:
     parser.add_argument("--z-min", type=float, default=-3.0)
     parser.add_argument("--z-max", type=float, default=5.0)
     parser.add_argument("--n-height-layers", type=int, default=8)
-    parser.add_argument("--height-encoding", default="iris", choices=["iris", "max"])
+    parser.add_argument("--height-encoding", default="iris", choices=["iris", "max", "physics3"])
     parser.add_argument("--row-pool", type=int, default=0)
     parser.add_argument("--row-pool-mode", default="max", choices=["max", "mean"])
     parser.add_argument("--output", default="results/kitti_bev_layout_rerank.json")
@@ -278,7 +298,12 @@ def main() -> None:
             n_height_layers=args.n_height_layers,
             height_encoding=args.height_encoding,
         )
-        bev_layouts = _pool_rows(bev_layouts, args.row_pool, args.row_pool_mode)
+        bev_layouts = _pool_rows(
+            bev_layouts,
+            args.row_pool,
+            args.row_pool_mode,
+            n_channels=3 if args.height_encoding == "physics3" else 1,
+        )
         results[seq] = _evaluate(
             base_cache=base_cache,
             bev_layouts=bev_layouts,

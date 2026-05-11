@@ -4,14 +4,14 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="neural-spectral-codec",
+    name="neural-spectral-descriptor",
     version="0.1.0",
     author="Kimun Park, Moon Gi Seok",
     author_email="",
-    description="Neural Spectral Histogram Codec for LiDAR Loop Closing",
+    description="Neural Spectral Descriptor for compact LiDAR place recognition",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/DguAiCps/Neural-Spectral-Codec",
+    url="https://github.com/DguAiCps/Neural-Spectral-Descriptor",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     classifiers=[

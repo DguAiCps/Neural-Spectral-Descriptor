@@ -177,6 +177,16 @@ class GNNTrainer:
         smoothap_n_neg: int = 32,
         smoothap_batch_anchors: int = 64,
         edge_aux_lambda: float = 0.0,
+        phase_edge_aux_lambda: float = 0.0,
+        phase_edge_aux_balance: bool = False,
+        phase_edge_aux_focal_gamma: float = 0.0,
+        phase_alignment_aux_lambda: float = 0.0,
+        phase_alignment_aux_balance: bool = False,
+        phase_alignment_aux_focal_gamma: float = 0.0,
+        context_aux_lambda: float = 0.0,
+        phase_token_aux_lambda: float = 0.0,
+        checkpoint_metric: str = 'average_recall@1',
+        recall_k_values: Optional[List[int]] = None,
     ):
         """
         Initialize trainer
@@ -250,6 +260,18 @@ class GNNTrainer:
         # Edge confidence gate auxiliary loss weight (BCE on pose-GT labels).
         # 0.0 disables aux loss; gate still runs forward but is unsupervised.
         self.edge_aux_lambda = edge_aux_lambda
+        self.phase_edge_aux_lambda = phase_edge_aux_lambda
+        self.phase_edge_aux_balance = phase_edge_aux_balance
+        self.phase_edge_aux_focal_gamma = phase_edge_aux_focal_gamma
+        self.phase_alignment_aux_lambda = phase_alignment_aux_lambda
+        self.phase_alignment_aux_balance = phase_alignment_aux_balance
+        self.phase_alignment_aux_focal_gamma = phase_alignment_aux_focal_gamma
+        self.context_aux_lambda = context_aux_lambda
+        self.phase_token_aux_lambda = phase_token_aux_lambda
+        self.checkpoint_metric = checkpoint_metric
+        self.recall_k_values = sorted(set(int(k) for k in (recall_k_values or [1, 5, 10])))
+        if 1 not in self.recall_k_values:
+            self.recall_k_values.insert(0, 1)
 
         # SmoothAP mining cache (anchors, pos_pool, neg_pool)
         self._smoothap_anchors = None
@@ -283,6 +305,172 @@ class GNNTrainer:
         # History
         self.train_losses = []
         self.val_metrics = []
+
+    @staticmethod
+    def _sensor_name_to_id() -> Dict[str, int]:
+        return {
+            'kitti': 0,
+            'nclt': 1,
+            'helipr': 2,
+            'mulran': 3,
+        }
+
+    @staticmethod
+    def _sensor_label_from_dataset_name(dataset_name: str) -> str:
+        return dataset_name.split('_', 1)[0].lower()
+
+    def _sensor_scalar_table_from_config(
+        self,
+        value,
+        num_sensors: int,
+        default: float,
+    ) -> torch.Tensor:
+        table = torch.full((num_sensors + 1,), float(default), dtype=torch.float32, device=self.device)
+        if isinstance(value, (int, float)):
+            table.fill_(float(value))
+            return table
+        if isinstance(value, (list, tuple)):
+            for idx, item in enumerate(value[:num_sensors]):
+                table[idx] = float(item)
+            return table
+        if isinstance(value, dict):
+            fallback = float(value.get('default', default))
+            table.fill_(fallback)
+            name_to_id = self._sensor_name_to_id()
+            for key, item in value.items():
+                if key == 'default':
+                    continue
+                idx = name_to_id.get(str(key).lower(), None)
+                if idx is None:
+                    try:
+                        idx = int(key)
+                    except (TypeError, ValueError):
+                        continue
+                if 0 <= idx < num_sensors:
+                    table[idx] = float(item)
+        return table
+
+    def _gate_alpha_regularization(self, graph: Data) -> Tuple[Optional[torch.Tensor], float]:
+        """Regularize residual gate alpha toward sensor-specific targets."""
+        base_model = self.model.gnn if hasattr(self.model, 'gnn') else self.model
+        alpha = getattr(base_model, '_last_alpha_for_loss', None)
+        cfg = getattr(base_model, 'sensor_gate_config', {}) or {}
+        if alpha is None or not cfg.get('enabled', False):
+            return None, 0.0
+
+        start_weight = float(cfg.get('regularization_weight', 0.0))
+        if start_weight <= 0:
+            return None, 0.0
+        final_weight = float(cfg.get('regularization_final_weight', start_weight))
+        anneal_epochs = int(cfg.get('regularization_anneal_epochs', 0))
+        if anneal_epochs > 0:
+            t = min(max(self.epoch, 0) / float(max(anneal_epochs - 1, 1)), 1.0)
+            weight = start_weight + (final_weight - start_weight) * t
+        else:
+            weight = start_weight
+
+        num_sensors = int(cfg.get('num_sensors', 4))
+        target_cfg = cfg.get('target_alpha', cfg.get('target', 0.0625))
+        target_table = self._sensor_scalar_table_from_config(
+            target_cfg, num_sensors=num_sensors, default=0.0625
+        )
+
+        sensor_id = getattr(graph, 'sensor_id', None)
+        if sensor_id is None:
+            sensor_id = torch.full(
+                (alpha.size(0),), num_sensors, dtype=torch.long, device=alpha.device
+            )
+        else:
+            sensor_id = sensor_id.to(device=alpha.device, dtype=torch.long).reshape(-1)
+            if sensor_id.numel() == 1:
+                sensor_id = sensor_id.expand(alpha.size(0))
+        sensor_id = sensor_id.clamp(min=0, max=num_sensors)
+        target = target_table.to(device=alpha.device, dtype=alpha.dtype)[sensor_id].unsqueeze(-1)
+        reg = F.mse_loss(alpha.float(), target.float())
+        return reg, weight
+
+    def _checkpoint_metric_value(self, all_metrics: Dict[str, Dict[str, float]]) -> Tuple[str, float]:
+        """Select validation metric for early stopping/checkpointing."""
+        key = (self.checkpoint_metric or 'average_recall@1').lower()
+        aliases = {
+            'avg': ('_average', 'recall@1'),
+            'average': ('_average', 'recall@1'),
+            'average_recall@1': ('_average', 'recall@1'),
+            'query_weighted_recall@1': ('_average', 'recall@1'),
+            'sequence_macro': ('_sequence_macro', 'recall@1'),
+            'sequence_macro_recall@1': ('_sequence_macro', 'recall@1'),
+            'sensor_macro': ('_sensor_macro', 'recall@1'),
+            'sensor_macro_recall@1': ('_sensor_macro', 'recall@1'),
+        }
+        if key in aliases:
+            section, metric = aliases[key]
+            return f"{section}.{metric}", float(all_metrics.get(section, {}).get(metric, 0.0))
+        if '.' in key:
+            section, metric = key.split('.', 1)
+            if not section.startswith('_'):
+                section = f"_{section}"
+            return f"{section}.{metric}", float(all_metrics.get(section, {}).get(metric, 0.0))
+        return '_average.recall@1', float(all_metrics.get('_average', {}).get('recall@1', 0.0))
+
+    def _balance_triplets(
+        self,
+        triplets: np.ndarray,
+        graph: Data,
+        sequence_ids: Optional[np.ndarray],
+        sampling_cfg: Optional[Dict],
+    ) -> np.ndarray:
+        """Downsample mined triplets so no sensor/sequence dominates the loss."""
+        if sampling_cfg is None or len(triplets) == 0:
+            return triplets
+        rng = np.random.default_rng(seed=self.epoch)
+
+        def _balanced_by_labels(labels: np.ndarray, cap_key: str, name: str) -> np.ndarray:
+            unique = [u for u in np.unique(labels) if np.sum(labels == u) > 0]
+            if not unique:
+                return triplets
+            counts = {int(u): int(np.sum(labels == u)) for u in unique}
+            cap = int(sampling_cfg.get(cap_key, 0) or 0)
+            target = min(counts.values())
+            if cap > 0:
+                target = min(target, cap)
+            selected = []
+            for u in unique:
+                idx = np.where(labels == u)[0]
+                if len(idx) > target:
+                    idx = rng.choice(idx, size=target, replace=False)
+                selected.append(idx)
+            keep = np.concatenate(selected) if selected else np.arange(len(triplets))
+            rng.shuffle(keep)
+            balanced = triplets[keep]
+            logging.info(
+                f"  Triplet {name} balance: before={counts}, target={target:,}, "
+                f"after={len(balanced):,}"
+            )
+            return balanced
+
+        balanced = triplets
+        if sampling_cfg.get('balanced_by_sensor', False):
+            sensor_id = getattr(graph, 'sensor_id', None)
+            if sensor_id is None:
+                logging.warning("  Triplet sensor balance requested but graph.sensor_id is missing")
+            else:
+                sensor_np = sensor_id.detach().cpu().numpy().reshape(-1)
+                labels = sensor_np[balanced[:, 0]]
+                triplets = balanced
+                balanced = _balanced_by_labels(
+                    labels,
+                    cap_key='max_triplets_per_sensor',
+                    name='sensor',
+                )
+        if sampling_cfg.get('balanced_by_sequence', False) and sequence_ids is not None:
+            labels = sequence_ids[balanced[:, 0]]
+            triplets = balanced
+            balanced = _balanced_by_labels(
+                labels,
+                cap_key='max_triplets_per_sequence',
+                name='sequence',
+            )
+        return balanced
 
     def _diagnose_false_negatives(
         self,
@@ -428,7 +616,8 @@ class GNNTrainer:
         descriptors: np.ndarray,
         sequence_ids: np.ndarray = None,
         n_triplets_per_anchor: int = 1,
-        mine_every_n_epochs: int = 1
+        mine_every_n_epochs: int = 1,
+        triplet_sampling_config: Optional[Dict] = None,
     ) -> float:
         """
         Train for one epoch
@@ -500,9 +689,17 @@ class GNNTrainer:
                 logging.warning("No valid triplets mined!")
                 return 0.0
 
-            self._cached_triplets = np.array(triplets)
+            triplets_np = np.array(triplets, dtype=np.int64)
+            triplets_np = self._balance_triplets(
+                triplets_np, graph, sequence_ids, triplet_sampling_config
+            )
+            self._cached_triplets = triplets_np
             self._last_mine_epoch = self.epoch
-            logging.info(f"Mined {len(triplets):,} triplets in {mining_time:.2f}s ({len(triplets)/mining_time:.0f} triplets/sec)")
+            logging.info(
+                f"Mined {len(triplets):,} triplets in {mining_time:.2f}s "
+                f"({len(triplets)/mining_time:.0f} triplets/sec); "
+                f"using {len(self._cached_triplets):,} after balancing"
+            )
         else:
             logging.info(f"Reusing cached triplets from epoch {self._last_mine_epoch + 1} "
                          f"({len(self._cached_triplets):,} triplets, next re-mine at epoch {self._last_mine_epoch + mine_every_n_epochs + 1})")
@@ -555,7 +752,7 @@ class GNNTrainer:
             # Auxiliary edge confidence loss (BCE on pose-GT labels). Computed once
             # per forward pass since edge_conf is stable for this window.
             base_model = self.model.gnn if hasattr(self.model, 'gnn') else self.model
-            aux_loss = None
+            aux_terms = []
             if (self.edge_aux_lambda > 0
                     and getattr(base_model, '_last_edge_conf', None) is not None
                     and hasattr(graph, 'edge_pose_label')
@@ -567,10 +764,86 @@ class GNNTrainer:
                 # Only supervise similarity edges (type==1); temporal are forced to 1.
                 sim_mask = (edge_type_t == 1)
                 if sim_mask.any():
-                    aux_loss = F.binary_cross_entropy(
+                    edge_aux = F.binary_cross_entropy(
                         edge_conf[sim_mask].clamp(1e-7, 1.0 - 1e-7),
                         edge_label[sim_mask],
                     )
+                    aux_terms.append(('edge', self.edge_aux_lambda, edge_aux, sim_mask, edge_label))
+
+            if (self.phase_edge_aux_lambda > 0
+                    and getattr(base_model, '_last_phase_edge_conf', None) is not None
+                    and hasattr(graph, 'edge_pose_label')
+                    and graph.edge_pose_label.numel() > 0):
+                phase_edge_conf = base_model._last_phase_edge_conf.squeeze(-1).float()
+                edge_label = graph.edge_pose_label.float()
+                edge_type_t = graph.edge_type
+                sim_mask = (edge_type_t == 1)
+                if sim_mask.any():
+                    phase_pred = phase_edge_conf[sim_mask].clamp(1e-7, 1.0 - 1e-7)
+                    phase_target = edge_label[sim_mask]
+                    phase_bce = F.binary_cross_entropy(
+                        phase_pred,
+                        phase_target,
+                        reduction='none',
+                    )
+                    phase_weight = torch.ones_like(phase_bce)
+                    if self.phase_edge_aux_balance:
+                        pos = phase_target.sum().clamp(min=1.0)
+                        neg = (1.0 - phase_target).sum().clamp(min=1.0)
+                        pos_weight = (neg / pos).clamp(min=1.0, max=20.0)
+                        phase_weight = torch.where(
+                            phase_target > 0.5,
+                            phase_weight * pos_weight,
+                            phase_weight,
+                        )
+                    if self.phase_edge_aux_focal_gamma > 0:
+                        pt = torch.where(phase_target > 0.5, phase_pred, 1.0 - phase_pred)
+                        phase_weight = phase_weight * (1.0 - pt).pow(self.phase_edge_aux_focal_gamma)
+                    phase_edge_aux = (phase_bce * phase_weight).sum() / phase_weight.sum().clamp(min=1.0)
+                    aux_terms.append((
+                        'phase-edge', self.phase_edge_aux_lambda,
+                        phase_edge_aux, sim_mask, edge_label
+                    ))
+
+            if (self.phase_alignment_aux_lambda > 0
+                    and getattr(base_model, '_last_phase_alignment_conf', None) is not None
+                    and hasattr(graph, 'edge_pose_label')
+                    and graph.edge_pose_label.numel() > 0):
+                align_conf = base_model._last_phase_alignment_conf.squeeze(-1).float()
+                edge_label = graph.edge_pose_label.float()
+                edge_type_t = graph.edge_type
+                sim_mask = (edge_type_t == 1)
+                if sim_mask.any():
+                    align_pred = align_conf[sim_mask].clamp(1e-7, 1.0 - 1e-7)
+                    align_target = edge_label[sim_mask]
+                    align_bce = F.binary_cross_entropy(
+                        align_pred,
+                        align_target,
+                        reduction='none',
+                    )
+                    align_weight = torch.ones_like(align_bce)
+                    if self.phase_alignment_aux_balance:
+                        pos = align_target.sum().clamp(min=1.0)
+                        neg = (1.0 - align_target).sum().clamp(min=1.0)
+                        pos_weight = (neg / pos).clamp(min=1.0, max=20.0)
+                        align_weight = torch.where(
+                            align_target > 0.5,
+                            align_weight * pos_weight,
+                            align_weight,
+                        )
+                    if self.phase_alignment_aux_focal_gamma > 0:
+                        pt = torch.where(align_target > 0.5, align_pred, 1.0 - align_pred)
+                        align_weight = align_weight * (1.0 - pt).pow(
+                            self.phase_alignment_aux_focal_gamma
+                        )
+                    align_aux = (
+                        (align_bce * align_weight).sum()
+                        / align_weight.sum().clamp(min=1.0)
+                    )
+                    aux_terms.append((
+                        'phase-align', self.phase_alignment_aux_lambda,
+                        align_aux, sim_mask, edge_label
+                    ))
 
             # Accumulate loss across all batches in this window
             total_loss = torch.tensor(0.0, device=self.device)
@@ -589,11 +862,55 @@ class GNNTrainer:
                         positives = embeddings[positive_indices]
                         negatives = embeddings[negative_indices]
                         batch_loss = self.criterion(anchors, positives, negatives)
+                        if self.context_aux_lambda > 0:
+                            base_model_for_ctx = self.model.gnn if hasattr(self.model, 'gnn') else self.model
+                            raw_dim = base_model_for_ctx.input_dim
+                            ctx_end = raw_dim + base_model_for_ctx.context_dim
+                            ctx_loss = self.criterion(
+                                embeddings[anchor_indices, raw_dim:ctx_end],
+                                embeddings[positive_indices, raw_dim:ctx_end],
+                                embeddings[negative_indices, raw_dim:ctx_end],
+                            )
+                            batch_loss = batch_loss + self.context_aux_lambda * ctx_loss
+                        if self.phase_token_aux_lambda > 0:
+                            base_model_for_phase = self.model.gnn if hasattr(self.model, 'gnn') else self.model
+                            phase_dim = getattr(base_model_for_phase, 'phase_token_dim', 0)
+                            if phase_dim > 0:
+                                phase_start = base_model_for_phase.input_dim + base_model_for_phase.context_dim
+                                phase_end = phase_start + phase_dim
+                                phase_loss = self.criterion(
+                                    embeddings[anchor_indices, phase_start:phase_end],
+                                    embeddings[positive_indices, phase_start:phase_end],
+                                    embeddings[negative_indices, phase_start:phase_end],
+                                )
+                                batch_loss = batch_loss + self.phase_token_aux_lambda * phase_loss
                 else:
                     anchors = embeddings[anchor_indices]
                     positives = embeddings[positive_indices]
                     negatives = embeddings[negative_indices]
                     batch_loss = self.criterion(anchors, positives, negatives)
+                    if self.context_aux_lambda > 0:
+                        base_model_for_ctx = self.model.gnn if hasattr(self.model, 'gnn') else self.model
+                        raw_dim = base_model_for_ctx.input_dim
+                        ctx_end = raw_dim + base_model_for_ctx.context_dim
+                        ctx_loss = self.criterion(
+                            embeddings[anchor_indices, raw_dim:ctx_end],
+                            embeddings[positive_indices, raw_dim:ctx_end],
+                            embeddings[negative_indices, raw_dim:ctx_end],
+                        )
+                        batch_loss = batch_loss + self.context_aux_lambda * ctx_loss
+                    if self.phase_token_aux_lambda > 0:
+                        base_model_for_phase = self.model.gnn if hasattr(self.model, 'gnn') else self.model
+                        phase_dim = getattr(base_model_for_phase, 'phase_token_dim', 0)
+                        if phase_dim > 0:
+                            phase_start = base_model_for_phase.input_dim + base_model_for_phase.context_dim
+                            phase_end = phase_start + phase_dim
+                            phase_loss = self.criterion(
+                                embeddings[anchor_indices, phase_start:phase_end],
+                                embeddings[positive_indices, phase_start:phase_end],
+                                embeddings[negative_indices, phase_start:phase_end],
+                            )
+                            batch_loss = batch_loss + self.phase_token_aux_lambda * phase_loss
 
                 total_loss = total_loss + batch_loss / n_in_window
                 epoch_losses.append(batch_loss.item())
@@ -601,14 +918,26 @@ class GNNTrainer:
 
             # Add aux loss once (after all batches in window) — affects the same
             # backward pass. Scaled to match the main-loss accumulation.
-            if aux_loss is not None:
-                total_loss = total_loss + self.edge_aux_lambda * aux_loss
+            if aux_terms:
+                for aux_name, aux_lambda, aux_loss, sim_mask, edge_label in aux_terms:
+                    total_loss = total_loss + aux_lambda * aux_loss
+                    if track_vram:
+                        logging.info(
+                            f"  Aux {aux_name} BCE: {aux_loss.item():.4f} "
+                            f"(λ={aux_lambda}, "
+                            f"sim_edges={int(sim_mask.sum())}, "
+                            f"label_pos_rate={edge_label[sim_mask].mean().item():.3f})"
+                        )
+
+            gate_reg, gate_reg_weight = self._gate_alpha_regularization(graph)
+            if gate_reg is not None and gate_reg_weight > 0:
+                total_loss = total_loss + gate_reg_weight * gate_reg
                 if track_vram:
+                    alpha = getattr(base_model, '_last_alpha', None)
+                    alpha_mean = float(alpha.float().mean().item()) if alpha is not None else float('nan')
                     logging.info(
-                        f"  Aux edge BCE: {aux_loss.item():.4f} "
-                        f"(λ={self.edge_aux_lambda}, "
-                        f"sim_edges={int(sim_mask.sum())}, "
-                        f"label_pos_rate={edge_label[sim_mask].mean().item():.3f})"
+                        f"  Aux gate-alpha MSE: {gate_reg.item():.4f} "
+                        f"(λ={gate_reg_weight:.4f}, alpha_mean={alpha_mean:.3f})"
                     )
 
                 # Opt 6: False negative diagnostic every 5 epochs (expensive scipy cdist)
@@ -899,14 +1228,17 @@ class GNNTrainer:
 
         base_model = self.model.gnn if hasattr(self.model, 'gnn') else self.model
         raw_dim = base_model.input_dim
+        ctx_end = raw_dim + base_model.context_dim
 
         # 2. Select refinement subspace
         if refine_space == 'ctx':
-            refine_descs = embeddings[:, raw_dim:]
+            refine_descs = embeddings[:, raw_dim:ctx_end]
         elif refine_space == 'full':
             refine_descs = embeddings
         elif refine_space == 'raw':
             refine_descs = embeddings[:, :raw_dim]
+        elif refine_space == 'phase':
+            refine_descs = embeddings[:, ctx_end:]
         else:
             raise ValueError(f"Unknown refine_space: {refine_space}")
         logging.info(f"[2-pass] refine_space='{refine_space}', shape={refine_descs.shape}")
@@ -1003,14 +1335,17 @@ class GNNTrainer:
                 # (temporal-only initially; cached refined edges on subsequent passes).
                 probe_emb = self.model(val_graph)
                 raw_dim = base_model.input_dim
+                ctx_end = raw_dim + base_model.context_dim
                 if self._refined_space == 'ctx':
-                    probe_descs = probe_emb[:, raw_dim:].detach().cpu().numpy().astype(np.float32)
+                    probe_descs = probe_emb[:, raw_dim:ctx_end].detach().cpu().numpy().astype(np.float32)
                 elif self._refined_space == 'full':
                     probe_descs = probe_emb.detach().cpu().numpy().astype(np.float32)
                 elif self._refined_space == 'raw':
                     probe_descs = probe_emb[:, :raw_dim].detach().cpu().numpy().astype(np.float32)
+                elif self._refined_space == 'phase':
+                    probe_descs = probe_emb[:, ctx_end:].detach().cpu().numpy().astype(np.float32)
                 else:
-                    probe_descs = probe_emb[:, raw_dim:].detach().cpu().numpy().astype(np.float32)
+                    probe_descs = probe_emb[:, raw_dim:ctx_end].detach().cpu().numpy().astype(np.float32)
                 del probe_emb
 
                 # Rebuild val similarity edges using train-fitted distribution.
@@ -1047,10 +1382,10 @@ class GNNTrainer:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        # GNN output: R@1, R@5, R@10 in one pass (single KD-Tree + FAISS build)
+        # GNN output: configured R@K values in one pass (single KD-Tree + FAISS build)
         recalls, n_queries = self._compute_recall_multi_k(
             embeddings_np, val_poses,
-            k_values=[1, 5, 10],
+            k_values=self.recall_k_values,
             distance_threshold=distance_threshold,
             skip_frames=skip_frames,
             per_query_records=per_query_records,
@@ -1077,7 +1412,8 @@ class GNNTrainer:
 
         # GNN context only: slice ctx_norm from cat(raw_norm, ctx_norm)
         raw_dim = base_model.input_dim
-        ctx_only_np = embeddings_np[:, raw_dim:]
+        ctx_end = raw_dim + base_model.context_dim
+        ctx_only_np = embeddings_np[:, raw_dim:ctx_end]
         ctx_recalls, _ = self._compute_recall_multi_k(
             ctx_only_np, val_poses,
             k_values=[1],
@@ -1087,12 +1423,21 @@ class GNNTrainer:
 
         result = {
             'recall@1': recalls[1],
-            'recall@5': recalls[5],
-            'recall@10': recalls[10],
             'raw_recall@1': raw_recalls[1],
             'ctx_recall@1': ctx_recalls[1],
             'n_queries': n_queries
         }
+        for k in self.recall_k_values:
+            result[f'recall@{k}'] = recalls[k]
+        if getattr(base_model, 'phase_token_dim', 0) > 0:
+            phase_only_np = embeddings_np[:, ctx_end:]
+            phase_recalls, _ = self._compute_recall_multi_k(
+                phase_only_np, val_poses,
+                k_values=[1],
+                distance_threshold=distance_threshold,
+                skip_frames=skip_frames
+            )
+            result['phase_recall@1'] = phase_recalls[1]
         if policy_recall_1 is not None:
             result['policy_recall@1'] = policy_recall_1
         if gate_alpha_np is not None:
@@ -1123,6 +1468,8 @@ class GNNTrainer:
         total_correct_at_1 = 0
         total_raw_correct_at_1 = 0
         total_ctx_correct_at_1 = 0
+        total_phase_correct_at_1 = 0
+        has_phase_metrics = False
         total_queries = 0
 
         if per_query_dump_dir is not None:
@@ -1156,20 +1503,35 @@ class GNNTrainer:
             policy_str = ""
             if 'policy_recall@1' in metrics:
                 policy_str = f", policy: {metrics['policy_recall@1']:.4f}"
+            phase_str = ""
+            if 'phase_recall@1' in metrics:
+                phase_str = f", phase: {metrics['phase_recall@1']:.4f}"
             gate_str = ""
             if 'gate_alpha_mean' in metrics:
                 gate_str = (f" | α: mean={metrics['gate_alpha_mean']:.3f} "
                             f"[p10={metrics['gate_alpha_p10']:.3f}, "
                             f"p90={metrics['gate_alpha_p90']:.3f}]")
+            extra_recall_str = ""
+            if 5 in self.recall_k_values and 'recall@5' in metrics:
+                extra_recall_str += f" | R@5: {metrics['recall@5']:.4f}"
+            if 10 in self.recall_k_values and 'recall@10' in metrics:
+                extra_recall_str += f" | R@10: {metrics['recall@10']:.4f}"
+            if 800 in self.recall_k_values and 'recall@800' in metrics:
+                extra_recall_str += f" | R@800: {metrics['recall@800']:.4f}"
             logging.info(
-                f"  {dataset_name:20s} | R@1: {metrics['recall@1']:.4f} (raw: {metrics['raw_recall@1']:.4f}, ctx: {metrics['ctx_recall@1']:.4f}{policy_str}) | "
-                f"R@5: {metrics['recall@5']:.4f} | Queries: {metrics['n_queries']}{gate_str}"
+                f"  {dataset_name:20s} | R@1: {metrics['recall@1']:.4f} "
+                f"(raw: {metrics['raw_recall@1']:.4f}, ctx: {metrics['ctx_recall@1']:.4f}"
+                f"{phase_str}{policy_str})"
+                f"{extra_recall_str} | Queries: {metrics['n_queries']}{gate_str}"
             )
 
             # Accumulate for weighted average
             total_correct_at_1 += metrics['recall@1'] * metrics['n_queries']
             total_raw_correct_at_1 += metrics['raw_recall@1'] * metrics['n_queries']
             total_ctx_correct_at_1 += metrics['ctx_recall@1'] * metrics['n_queries']
+            if 'phase_recall@1' in metrics:
+                total_phase_correct_at_1 += metrics['phase_recall@1'] * metrics['n_queries']
+                has_phase_metrics = True
             total_queries += metrics['n_queries']
 
         # Compute weighted average
@@ -1177,10 +1539,12 @@ class GNNTrainer:
             avg_recall_at_1 = total_correct_at_1 / total_queries
             avg_raw_recall_at_1 = total_raw_correct_at_1 / total_queries
             avg_ctx_recall_at_1 = total_ctx_correct_at_1 / total_queries
+            avg_phase_recall_at_1 = total_phase_correct_at_1 / total_queries
         else:
             avg_recall_at_1 = 0.0
             avg_raw_recall_at_1 = 0.0
             avg_ctx_recall_at_1 = 0.0
+            avg_phase_recall_at_1 = 0.0
 
         all_metrics['_average'] = {
             'recall@1': avg_recall_at_1,
@@ -1188,8 +1552,69 @@ class GNNTrainer:
             'ctx_recall@1': avg_ctx_recall_at_1,
             'n_queries': total_queries
         }
+        if has_phase_metrics:
+            all_metrics['_average']['phase_recall@1'] = avg_phase_recall_at_1
+            phase_avg_str = f", phase: {avg_phase_recall_at_1:.4f}"
+        else:
+            phase_avg_str = ""
         logging.info(
-            f"  {'AVERAGE':20s} | R@1: {avg_recall_at_1:.4f} (raw: {avg_raw_recall_at_1:.4f}, ctx: {avg_ctx_recall_at_1:.4f}) | Total Queries: {total_queries}"
+            f"  {'AVERAGE':20s} | R@1: {avg_recall_at_1:.4f} "
+            f"(raw: {avg_raw_recall_at_1:.4f}, ctx: {avg_ctx_recall_at_1:.4f}"
+            f"{phase_avg_str}) | Total Queries: {total_queries}"
+        )
+
+        dataset_metrics = {
+            name: metrics for name, metrics in all_metrics.items()
+            if not name.startswith('_') and metrics.get('n_queries', 0) > 0
+        }
+        if dataset_metrics:
+            seq_macro = float(np.mean([m['recall@1'] for m in dataset_metrics.values()]))
+            raw_seq_macro = float(np.mean([m['raw_recall@1'] for m in dataset_metrics.values()]))
+            ctx_seq_macro = float(np.mean([m['ctx_recall@1'] for m in dataset_metrics.values()]))
+        else:
+            seq_macro = raw_seq_macro = ctx_seq_macro = 0.0
+
+        sensor_groups = {}
+        for dataset_name, metrics in dataset_metrics.items():
+            sensor_label = self._sensor_label_from_dataset_name(dataset_name)
+            sensor_groups.setdefault(sensor_label, []).append(metrics)
+        if sensor_groups:
+            sensor_macro = float(np.mean([
+                np.mean([m['recall@1'] for m in group])
+                for group in sensor_groups.values()
+            ]))
+            raw_sensor_macro = float(np.mean([
+                np.mean([m['raw_recall@1'] for m in group])
+                for group in sensor_groups.values()
+            ]))
+            ctx_sensor_macro = float(np.mean([
+                np.mean([m['ctx_recall@1'] for m in group])
+                for group in sensor_groups.values()
+            ]))
+        else:
+            sensor_macro = raw_sensor_macro = ctx_sensor_macro = 0.0
+
+        all_metrics['_sequence_macro'] = {
+            'recall@1': seq_macro,
+            'raw_recall@1': raw_seq_macro,
+            'ctx_recall@1': ctx_seq_macro,
+            'n_datasets': len(dataset_metrics),
+        }
+        all_metrics['_sensor_macro'] = {
+            'recall@1': sensor_macro,
+            'raw_recall@1': raw_sensor_macro,
+            'ctx_recall@1': ctx_sensor_macro,
+            'n_sensors': len(sensor_groups),
+        }
+        logging.info(
+            f"  {'SEQ-MACRO':20s} | R@1: {seq_macro:.4f} "
+            f"(raw: {raw_seq_macro:.4f}, ctx: {ctx_seq_macro:.4f}) | "
+            f"Datasets: {len(dataset_metrics)}"
+        )
+        logging.info(
+            f"  {'SENSOR-MACRO':20s} | R@1: {sensor_macro:.4f} "
+            f"(raw: {raw_sensor_macro:.4f}, ctx: {ctx_sensor_macro:.4f}) | "
+            f"Sensors: {len(sensor_groups)}"
         )
 
         return all_metrics
@@ -1322,6 +1747,7 @@ class GNNTrainer:
         refine_edge_kwargs: Optional[Dict] = None,
         refine_fit_kwargs: Optional[Dict] = None,
         temperature_schedule: Optional[Dict] = None,
+        triplet_sampling_config: Optional[Dict] = None,
     ):
         """
         Full training loop
@@ -1364,6 +1790,8 @@ class GNNTrainer:
         logging.info(f"Triplet mining: {n_triplets_per_anchor} triplets/anchor")
         if validate_every_n_epochs > 1:
             logging.info(f"Validation frequency: every {validate_every_n_epochs} epochs")
+        logging.info(f"Checkpoint metric: {self.checkpoint_metric}")
+        logging.info(f"Validation recall K values: {self.recall_k_values}")
 
         temp_schedule = dict(temperature_schedule or {})
         temp_schedule_enabled = (
@@ -1420,6 +1848,7 @@ class GNNTrainer:
                 sequence_ids=train_sequence_ids,
                 n_triplets_per_anchor=n_triplets_per_anchor,
                 mine_every_n_epochs=mine_every_n_epochs,
+                triplet_sampling_config=triplet_sampling_config,
             )
             train_time = time.perf_counter() - epoch_start
 
@@ -1438,6 +1867,7 @@ class GNNTrainer:
                 val_start = time.perf_counter()
                 all_metrics = self.validate_all(val_datasets)
                 avg_metrics = all_metrics['_average']
+                metric_name, selected_val_metric = self._checkpoint_metric_value(all_metrics)
                 self.val_metrics.append(all_metrics)
                 val_time = time.perf_counter() - val_start
 
@@ -1445,14 +1875,17 @@ class GNNTrainer:
                 logging.info(
                     f"Epoch {epoch + 1}/{n_epochs} | Loss: {avg_loss:.4f} | "
                     f"Avg R@1: {avg_metrics['recall@1']:.4f} | "
+                    f"{metric_name}: {selected_val_metric:.4f} | "
                     f"Time: {epoch_total:.1f}s (train={train_time:.1f}s, val={val_time:.1f}s)"
                 )
 
-                # Save best model (based on average R@1 across all datasets)
-                if avg_metrics['recall@1'] > self.best_val_metric:
-                    self.best_val_metric = avg_metrics['recall@1']
+                # Save best model using the configured checkpoint metric.
+                if selected_val_metric > self.best_val_metric:
+                    self.best_val_metric = selected_val_metric
                     self.save_checkpoint('best_model.pth')
-                    logging.info(f"  -> New best model! Avg R@1: {self.best_val_metric:.4f}")
+                    logging.info(
+                        f"  -> New best model! {metric_name}: {self.best_val_metric:.4f}"
+                    )
                     self.epochs_without_improvement = 0
                 else:
                     self.epochs_without_improvement += 1
@@ -1461,7 +1894,7 @@ class GNNTrainer:
                 # Early stopping
                 if self.epochs_without_improvement >= self.patience:
                     logging.info(f"Early stopping triggered after {self.patience} epochs without improvement")
-                    logging.info(f"Best validation Avg R@1: {self.best_val_metric:.4f}")
+                    logging.info(f"Best validation metric ({self.checkpoint_metric}): {self.best_val_metric:.4f}")
                     break
             else:
                 epoch_total = time.perf_counter() - epoch_start
@@ -1479,7 +1912,10 @@ class GNNTrainer:
         # Save final model
         total_time = time.perf_counter() - total_training_start
         self.save_checkpoint('final_model.pth')
-        logging.info(f"Training complete! Total time: {total_time/3600:.2f}h | Best R@1: {self.best_val_metric:.4f}")
+        logging.info(
+            f"Training complete! Total time: {total_time/3600:.2f}h | "
+            f"Best {self.checkpoint_metric}: {self.best_val_metric:.4f}"
+        )
 
     def save_checkpoint(self, filename: str):
         """Save checkpoint"""
@@ -1489,6 +1925,7 @@ class GNNTrainer:
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'best_val_metric': self.best_val_metric,
+            'checkpoint_metric': self.checkpoint_metric,
             'train_losses': self.train_losses,
             'val_metrics': self.val_metrics,
             'epochs_without_improvement': self.epochs_without_improvement

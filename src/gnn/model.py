@@ -22,6 +22,12 @@ from torch_geometric.data import Data
 from torch_geometric.utils import softmax
 from typing import Optional
 
+from encoding.phase_coherence import ClosedFormPhaseEdgeBias
+from encoding.phase_alignment import (
+    feature_dim as phase_alignment_feature_dim,
+    phase_alignment_edge_features,
+)
+
 
 class SinusoidalEncoding(nn.Module):
     """
@@ -180,17 +186,198 @@ class EdgeConfidenceGate(nn.Module):
         return torch.where(is_temporal, torch.zeros_like(logit), logit)
 
 
+class PhaseTokenProjector(nn.Module):
+    """Trainable compressor for compact phase features."""
+
+    def __init__(
+        self,
+        input_dim: int,
+        token_dim: int = 64,
+        hidden_dim: int = 128,
+        dropout: float = 0.1,
+        mode: str = "mlp",
+    ):
+        super().__init__()
+        self.input_dim = int(input_dim)
+        self.token_dim = int(token_dim)
+        self.mode = mode
+        if mode == "identity":
+            if self.token_dim != self.input_dim:
+                raise ValueError(
+                    "identity phase projector requires token_dim == input_dim "
+                    f"(got token_dim={self.token_dim}, input_dim={self.input_dim})"
+                )
+            self.net = nn.Identity()
+        else:
+            self.net = nn.Sequential(
+                nn.LayerNorm(self.input_dim),
+                nn.Linear(self.input_dim, hidden_dim),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, self.token_dim),
+            )
+
+    def forward(self, x_phase: torch.Tensor) -> torch.Tensor:
+        return self.net(x_phase)
+
+
+class PhaseEdgeBias(nn.Module):
+    """Phase-aware attention bias for graph edges.
+
+    This module does not append phase to the final descriptor. It learns a
+    scalar edge logit from phase consistency between source/target nodes and
+    injects it into GAT attention before softmax.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        key_dim: int = 32,
+        hidden_dim: int = 64,
+        dropout: float = 0.1,
+        max_logit: float = 2.0,
+        similarity_only: bool = True,
+    ):
+        super().__init__()
+        self.input_dim = int(input_dim)
+        self.key_dim = int(key_dim)
+        self.max_logit = float(max_logit)
+        self.similarity_only = bool(similarity_only)
+
+        self.norm = nn.LayerNorm(self.input_dim)
+        self.node_proj = nn.Sequential(
+            nn.Linear(self.input_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, self.key_dim),
+        )
+        self.edge_mlp = nn.Sequential(
+            nn.Linear(3 * self.key_dim + 1, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1),
+        )
+        # Starts exactly as the old GAT; training must earn any phase effect.
+        nn.init.zeros_(self.edge_mlp[-1].weight)
+        nn.init.zeros_(self.edge_mlp[-1].bias)
+
+    def forward(
+        self,
+        x_phase: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_type: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        src, tgt = edge_index[0], edge_index[1]
+        z = self.node_proj(self.norm(x_phase))
+        z = F.normalize(z, p=2, dim=-1)
+        z_src = z[src]
+        z_tgt = z[tgt]
+        cos = (z_src * z_tgt).sum(dim=-1, keepdim=True)
+        signed_delta = z_src - z_tgt
+        feats = torch.cat([
+            torch.abs(signed_delta),
+            signed_delta,
+            z_src * z_tgt,
+            cos,
+        ], dim=-1)
+        logit = self.max_logit * torch.tanh(self.edge_mlp(feats))
+
+        if self.similarity_only and edge_type is not None:
+            is_similarity = (edge_type == 1).unsqueeze(-1)
+            logit = torch.where(is_similarity, logit, torch.zeros_like(logit))
+        return logit
+
+
+class PhaseAlignmentEdgeBias(nn.Module):
+    """Leakage-controlled phase-alignment bias/value gate for GAT edges.
+
+    Unlike :class:`PhaseEdgeBias`, this module does not learn phase consistency
+    from node embeddings. It computes explicit cyclic-shift alignment features
+    from raw complex Fourier phase coefficients and feeds only a small feature
+    vector to an MLP. The raw alignment score is disabled by default to avoid
+    trivially copying the closed-form phase-sketch reranker.
+    """
+
+    def __init__(
+        self,
+        n_rows: int,
+        n_freqs: int,
+        n_sectors: int,
+        hidden_dim: int = 32,
+        dropout: float = 0.1,
+        max_logit: float = 2.0,
+        include_score: bool = False,
+        similarity_only: bool = True,
+        entropy_temperature: float = 0.05,
+    ):
+        super().__init__()
+        self.n_rows = int(n_rows)
+        self.n_freqs = int(n_freqs)
+        self.n_sectors = int(n_sectors)
+        self.include_score = bool(include_score)
+        self.similarity_only = bool(similarity_only)
+        self.entropy_temperature = float(entropy_temperature)
+        self.max_logit = float(max_logit)
+        self.input_dim = phase_alignment_feature_dim(self.include_score)
+
+        self.mlp = nn.Sequential(
+            nn.LayerNorm(self.input_dim),
+            nn.Linear(self.input_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1),
+        )
+        # Start as old GAT; training must earn any phase-conditioned effect.
+        nn.init.zeros_(self.mlp[-1].weight)
+        nn.init.zeros_(self.mlp[-1].bias)
+
+    def features(
+        self,
+        x_phase: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_type: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        return phase_alignment_edge_features(
+            x_phase=x_phase,
+            edge_index=edge_index,
+            edge_type=edge_type,
+            n_rows=self.n_rows,
+            n_freqs=self.n_freqs,
+            n_sectors=self.n_sectors,
+            include_score=self.include_score,
+            similarity_only=self.similarity_only,
+            entropy_temperature=self.entropy_temperature,
+        )
+
+    def forward(
+        self,
+        x_phase: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_type: Optional[torch.Tensor] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        feats = self.features(x_phase.float(), edge_index, edge_type)
+        logit = self.max_logit * torch.tanh(self.mlp(feats))
+        if self.similarity_only and edge_type is not None:
+            is_similarity = (edge_type == 1).unsqueeze(-1)
+            logit = torch.where(is_similarity, logit, torch.zeros_like(logit))
+        return logit, feats
+
+
 class DiffAttnConv(MessagePassing):
     """
     Difference-based Attention Convolution with edge score bias.
 
-    Computes messages from feature DIFFERENCES (h_j - h_i).
+    Computes attention from feature DIFFERENCES (h_j - h_i). By default the
+    value/message path also uses differences for backward compatibility. The
+    optional ``value_source='abs_diff'`` adds an absolute-neighbor value branch
+    W_abs h_j so the layer keeps keyframe identity while retaining diff-based
+    attention.
     Edge embeddings are applied as scalar bias to attention scores.
 
     Attention:
         α_ij = softmax( (W_q·h_i)^T · (W_k·(h_j - h_i)) / √d + bias(edge_embed_ij) )
     Message:
-        msg_ij = α_ij · W_v · (h_j - h_i)
+        msg_ij = α_ij · (W_v · (h_j - h_i) [+ W_abs · h_j])
     """
 
     def __init__(
@@ -198,15 +385,23 @@ class DiffAttnConv(MessagePassing):
         channels: int,
         heads: int = 4,
         edge_dim: int = None,
-        dropout: float = 0.1
+        dropout: float = 0.1,
+        value_source: str = "diff",
     ):
         super().__init__(aggr='add', node_dim=0)
+
+        if value_source not in {"diff", "abs_diff"}:
+            raise ValueError(
+                f"Unknown DiffAttnConv value_source={value_source!r}; "
+                "expected 'diff' or 'abs_diff'."
+            )
 
         self.channels = channels
         self.heads = heads
         self.head_dim = channels // heads
         self.edge_dim = edge_dim
         self.scale = math.sqrt(self.head_dim)
+        self.value_source = value_source
 
         # Query: from target node h_i
         self.W_q = nn.Linear(channels, heads * self.head_dim, bias=False)
@@ -214,6 +409,12 @@ class DiffAttnConv(MessagePassing):
         self.W_k = nn.Linear(channels, heads * self.head_dim, bias=False)
         # Value: from difference (h_j - h_i)
         self.W_v = nn.Linear(channels, heads * self.head_dim, bias=False)
+        # Optional absolute-neighbor value branch. This fixes the information
+        # loss of pure differences without changing attention semantics.
+        if value_source == "abs_diff":
+            self.W_v_abs = nn.Linear(channels, heads * self.head_dim, bias=False)
+        else:
+            self.W_v_abs = None
 
         # Edge score bias: maps edge embedding to per-head scalar bias
         if edge_dim is not None:
@@ -232,6 +433,11 @@ class DiffAttnConv(MessagePassing):
         nn.init.xavier_uniform_(self.W_q.weight)
         nn.init.xavier_uniform_(self.W_k.weight)
         nn.init.xavier_uniform_(self.W_v.weight)
+        if self.W_v_abs is not None:
+            # Start exactly as the original diff-only operator. Training must
+            # earn any absolute-neighbor contribution, which keeps ablations
+            # stable and prevents random value noise at epoch 0.
+            nn.init.zeros_(self.W_v_abs.weight)
         if self.bias_mlp is not None:
             # Initialize final layer near zero for stable training start
             nn.init.zeros_(self.bias_mlp[-1].weight)
@@ -243,6 +449,7 @@ class DiffAttnConv(MessagePassing):
         edge_index: torch.Tensor,
         edge_attr: torch.Tensor = None,
         edge_logit: torch.Tensor = None,
+        edge_value_gate: torch.Tensor = None,
         return_attention_weights: bool = False
     ) -> torch.Tensor:
         """Memory-efficient forward bypassing propagate().
@@ -252,6 +459,9 @@ class DiffAttnConv(MessagePassing):
                 scores BEFORE softmax. Large positive → boosts edge; large
                 negative → suppresses. Numerically stable (softmax handles
                 normalization automatically).
+            edge_value_gate: optional (n_edges, 1) multiplicative gate applied
+                to messages AFTER attention. Used for phase-conditioned
+                difference propagation without changing descriptor dimension.
         """
         self._return_attn = return_attention_weights
         self._attn_weights = None
@@ -290,8 +500,13 @@ class DiffAttnConv(MessagePassing):
             self._attn_weights = attn.detach()
 
         # Value and message (diff already in memory from above)
-        V = self.W_v(diff).view(-1, self.heads, self.head_dim)
+        value = self.W_v(diff)
+        if self.W_v_abs is not None:
+            value = value + self.W_v_abs(x[src])
+        V = value.view(-1, self.heads, self.head_dim)
         msg = attn.unsqueeze(-1) * V  # (n_edges, heads, head_dim)
+        if edge_value_gate is not None:
+            msg = msg * edge_value_gate.unsqueeze(-1)
         msg = msg.reshape(-1, self.heads * self.head_dim)
 
         # Aggregate via scatter_add (equivalent to aggr='add')
@@ -333,6 +548,12 @@ class SpectralGNN(nn.Module):
         gate_initial_alpha: float = 0.5,
         use_edge_confidence_gate: bool = False,
         edge_gate_hidden_dim: int = 16,
+        phase_token_config: Optional[dict] = None,
+        phase_edge_config: Optional[dict] = None,
+        phase_alignment_config: Optional[dict] = None,
+        phase_coherence_config: Optional[dict] = None,
+        sensor_gate_config: Optional[dict] = None,
+        diffattn_value_source: str = "diff",
     ):
         super().__init__()
 
@@ -344,6 +565,12 @@ class SpectralGNN(nn.Module):
         self.residual = residual
         self.gradient_checkpointing = gradient_checkpointing
         self.use_residual_gate = use_residual_gate
+        self.phase_token_config = phase_token_config or {}
+        self.phase_edge_config = phase_edge_config or {}
+        self.phase_alignment_config = phase_alignment_config or {}
+        self.phase_coherence_config = phase_coherence_config or {}
+        self.sensor_gate_config = sensor_gate_config or {}
+        self.diffattn_value_source = diffattn_value_source
 
         # Spectral policy: if provided, overrides input_dim with policy output
         self.spectral_policy = spectral_policy
@@ -374,7 +601,8 @@ class SpectralGNN(nn.Module):
                     channels=hidden_dim,
                     heads=n_heads,
                     edge_dim=effective_edge_dim,
-                    dropout=dropout
+                    dropout=dropout,
+                    value_source=diffattn_value_source,
                 )
             )
             self.batch_norms.append(self._make_norm(hidden_dim, norm_type))
@@ -386,9 +614,42 @@ class SpectralGNN(nn.Module):
         # output = cat(raw_norm, α · ctx_norm). α=0 → raw only; α=1 → 50/50 mix
         # (matches current behavior). Lets the model adapt: KITTI raw is great
         # → push α toward 0; HeLiPR raw is weak → push α toward 1.
+        self.sensor_gate_enabled = bool(self.sensor_gate_config.get("enabled", False))
+        self.sensor_embed = None
+        self.beam_embed = None
+        self._sensor_name_to_id = {
+            "kitti": 0,
+            "nclt": 1,
+            "helipr": 2,
+            "mulran": 3,
+        }
+        gate_input_dim = hidden_dim
+        if self.sensor_gate_enabled:
+            self.num_sensors = int(self.sensor_gate_config.get("num_sensors", 4))
+            self.unknown_sensor_id = self.num_sensors
+            sensor_embed_dim = int(self.sensor_gate_config.get("sensor_embed_dim", 8))
+            self.sensor_embed = nn.Embedding(self.num_sensors + 1, sensor_embed_dim)
+            gate_input_dim += sensor_embed_dim
+
+            if bool(self.sensor_gate_config.get("use_beam_count", True)):
+                beam_embed_dim = int(self.sensor_gate_config.get("beam_embed_dim", 4))
+                self.beam_embed = nn.Sequential(
+                    nn.Linear(1, beam_embed_dim),
+                    nn.ReLU(),
+                    nn.Linear(beam_embed_dim, beam_embed_dim),
+                )
+                gate_input_dim += beam_embed_dim
+            self.default_beam_count = float(self.sensor_gate_config.get("default_beam_count", 64.0))
+            self.alpha_max_by_sensor = self._make_sensor_scalar_table(
+                self.sensor_gate_config.get("alpha_max", 1.0),
+                default=1.0,
+            )
+        else:
+            self.alpha_max_by_sensor = None
+
         if use_residual_gate:
             self.gate = nn.Sequential(
-                nn.Linear(hidden_dim, gate_hidden_dim),
+                nn.Linear(gate_input_dim, gate_hidden_dim),
                 nn.ReLU(),
                 nn.Linear(gate_hidden_dim, 1),
             )
@@ -406,6 +667,7 @@ class SpectralGNN(nn.Module):
 
         # Diagnostic: store last-forward alpha for logging
         self._last_alpha = None
+        self._last_alpha_for_loss = None
 
         # Edge confidence gate: per-edge soft same-place classifier
         # c_e = sigmoid(MLP(edge_emb)). Multiplies attention weight in DiffAttnConv.
@@ -424,6 +686,85 @@ class SpectralGNN(nn.Module):
             self.edge_gate = None
         self._last_edge_conf = None  # diagnostic for aux loss
 
+        if self.phase_edge_config.get("enabled", False):
+            phase_edge_input_dim = int(self.phase_edge_config["input_dim"])
+            self.phase_edge_bias = PhaseEdgeBias(
+                input_dim=phase_edge_input_dim,
+                key_dim=int(self.phase_edge_config.get("key_dim", 32)),
+                hidden_dim=int(self.phase_edge_config.get("hidden_dim", 64)),
+                dropout=float(self.phase_edge_config.get("dropout", dropout)),
+                max_logit=float(self.phase_edge_config.get("max_logit", 2.0)),
+                similarity_only=bool(self.phase_edge_config.get("similarity_only", True)),
+            )
+        else:
+            self.phase_edge_bias = None
+        self._last_phase_edge_conf = None
+        self._last_phase_edge_logit = None
+        self.phase_edge_value_scale = float(self.phase_edge_config.get("value_scale", 0.0))
+
+        if self.phase_alignment_config.get("enabled", False):
+            self.phase_alignment_bias = PhaseAlignmentEdgeBias(
+                n_rows=int(self.phase_alignment_config["n_rows"]),
+                n_freqs=int(self.phase_alignment_config["n_freqs"]),
+                n_sectors=int(self.phase_alignment_config.get("n_sectors", 60)),
+                hidden_dim=int(self.phase_alignment_config.get("hidden_dim", 32)),
+                dropout=float(self.phase_alignment_config.get("dropout", dropout)),
+                max_logit=float(self.phase_alignment_config.get("max_logit", 2.0)),
+                include_score=bool(self.phase_alignment_config.get("include_score", False)),
+                similarity_only=bool(self.phase_alignment_config.get("similarity_only", True)),
+                entropy_temperature=float(
+                    self.phase_alignment_config.get("entropy_temperature", 0.05)
+                ),
+            )
+        else:
+            self.phase_alignment_bias = None
+        self.phase_alignment_value_scale = float(
+            self.phase_alignment_config.get("value_scale", 0.0)
+        )
+        self._last_phase_alignment_logit = None
+        self._last_phase_alignment_conf = None
+        self._last_phase_alignment_features = None
+
+        # Closed-form (parameter-free) phase coherence edge bias.
+        # Stacks additively with the learned PhaseEdgeBias above.
+        if self.phase_coherence_config.get("enabled", False):
+            self.phase_coherence_bias = ClosedFormPhaseEdgeBias(
+                n_rows=int(self.phase_coherence_config["n_rows"]),
+                n_freqs=int(self.phase_coherence_config["n_freqs"]),
+                scale=float(self.phase_coherence_config.get("scale", 2.0)),
+                mode=str(self.phase_coherence_config.get("mode", "poc")),
+                pad_factor=int(self.phase_coherence_config.get("pad_factor", 4)),
+                similarity_only=bool(self.phase_coherence_config.get("similarity_only", True)),
+                center=bool(self.phase_coherence_config.get("center", True)),
+            )
+        else:
+            self.phase_coherence_bias = None
+        self._last_phase_coherence_logit = None
+        self._last_edge_logit = None
+
+        if self.phase_token_config.get("enabled", False):
+            phase_input_dim = int(self.phase_token_config["input_dim"])
+            phase_token_dim = int(self.phase_token_config.get("token_dim", 64))
+            self.phase_projector = PhaseTokenProjector(
+                input_dim=phase_input_dim,
+                token_dim=phase_token_dim,
+                hidden_dim=int(self.phase_token_config.get("hidden_dim", 128)),
+                dropout=float(self.phase_token_config.get("dropout", dropout)),
+                mode=str(self.phase_token_config.get("mode", "mlp")),
+            )
+            self.phase_token_dim = phase_token_dim
+            phase_initial_alpha = float(self.phase_token_config.get("initial_alpha", 0.25))
+            phase_initial_alpha = min(max(phase_initial_alpha, 1e-4), 1.0 - 1e-4)
+            self.phase_logit = nn.Parameter(
+                torch.tensor(math.log(phase_initial_alpha / (1.0 - phase_initial_alpha)))
+            )
+            self._last_phase_alpha = None
+        else:
+            self.phase_projector = None
+            self.phase_token_dim = 0
+            self.phase_logit = None
+            self._last_phase_alpha = None
+
     @staticmethod
     def _make_norm(dim: int, norm_type: str) -> nn.Module:
         if norm_type == 'layer_norm':
@@ -432,6 +773,124 @@ class SpectralGNN(nn.Module):
             return nn.Identity()
         else:  # 'batch_norm' (default)
             return nn.BatchNorm1d(dim)
+
+    def _gate_input(self, h: torch.Tensor, data: Data) -> torch.Tensor:
+        """Build residual-gate input with optional sensor metadata.
+
+        ``sensor_id`` is a per-node long tensor. Unknown or missing ids map to
+        the final embedding row. ``beam_count`` is normalized continuously so a
+        new sensor can still fall back on beam density even without a learned
+        discrete token.
+        """
+        if not self.sensor_gate_enabled:
+            return h
+
+        n_nodes = h.size(0)
+        parts = [h]
+
+        if self.sensor_embed is not None:
+            sensor_id = getattr(data, "sensor_id", None)
+            if sensor_id is None:
+                sensor_id = torch.full(
+                    (n_nodes,),
+                    self.unknown_sensor_id,
+                    device=h.device,
+                    dtype=torch.long,
+                )
+            elif not torch.is_tensor(sensor_id):
+                sensor_id = torch.as_tensor(sensor_id, device=h.device, dtype=torch.long)
+            else:
+                sensor_id = sensor_id.to(device=h.device, dtype=torch.long)
+
+            sensor_id = sensor_id.reshape(-1)
+            if sensor_id.numel() == 1:
+                sensor_id = sensor_id.expand(n_nodes)
+            elif sensor_id.numel() != n_nodes:
+                raise RuntimeError(
+                    f"sensor_id must have 1 or {n_nodes} entries, got {sensor_id.numel()}"
+                )
+            sensor_id = sensor_id.clamp(min=0, max=self.unknown_sensor_id)
+            parts.append(self.sensor_embed(sensor_id))
+
+        if self.beam_embed is not None:
+            beam_count = getattr(data, "beam_count", None)
+            if beam_count is None:
+                beam_count = torch.full(
+                    (n_nodes, 1),
+                    self.default_beam_count,
+                    device=h.device,
+                    dtype=h.dtype,
+                )
+            elif not torch.is_tensor(beam_count):
+                beam_count = torch.as_tensor(beam_count, device=h.device, dtype=h.dtype)
+            else:
+                beam_count = beam_count.to(device=h.device, dtype=h.dtype)
+
+            beam_count = beam_count.reshape(-1, 1)
+            if beam_count.size(0) == 1:
+                beam_count = beam_count.expand(n_nodes, 1)
+            elif beam_count.size(0) != n_nodes:
+                raise RuntimeError(
+                    f"beam_count must have 1 or {n_nodes} entries, got {beam_count.size(0)}"
+                )
+            beam_norm = torch.log(torch.clamp(beam_count, min=1.0)) / math.log(64.0)
+            parts.append(self.beam_embed(beam_norm))
+
+        return torch.cat(parts, dim=-1)
+
+    def _make_sensor_scalar_table(self, value, default: float) -> torch.Tensor:
+        """Build a length ``num_sensors + 1`` table from scalar/list/dict config."""
+        table = torch.full((self.num_sensors + 1,), float(default), dtype=torch.float32)
+        if isinstance(value, (int, float)):
+            table.fill_(float(value))
+            return table
+        if isinstance(value, (list, tuple)):
+            for idx, item in enumerate(value[: self.num_sensors]):
+                table[idx] = float(item)
+            return table
+        if isinstance(value, dict):
+            fallback = value.get("default", default)
+            table.fill_(float(fallback))
+            for key, item in value.items():
+                if key == "default":
+                    continue
+                idx = self._sensor_name_to_id.get(str(key).lower(), None)
+                if idx is None:
+                    try:
+                        idx = int(key)
+                    except (TypeError, ValueError):
+                        continue
+                if 0 <= idx < self.num_sensors:
+                    table[idx] = float(item)
+            return table
+        return table
+
+    def _sensor_ids_for_nodes(self, data: Data, n_nodes: int, device: torch.device) -> torch.Tensor:
+        """Return clamped per-node sensor ids, using unknown id when missing."""
+        sensor_id = getattr(data, "sensor_id", None)
+        if sensor_id is None:
+            sensor_id = torch.full(
+                (n_nodes,), self.unknown_sensor_id, dtype=torch.long, device=device
+            )
+        elif not torch.is_tensor(sensor_id):
+            sensor_id = torch.as_tensor(sensor_id, dtype=torch.long, device=device)
+        else:
+            sensor_id = sensor_id.to(device=device, dtype=torch.long)
+        sensor_id = sensor_id.reshape(-1)
+        if sensor_id.numel() == 1:
+            sensor_id = sensor_id.expand(n_nodes)
+        elif sensor_id.numel() != n_nodes:
+            raise ValueError(f"sensor_id must have 1 or {n_nodes} entries, got {sensor_id.numel()}")
+        return sensor_id.clamp(min=0, max=self.unknown_sensor_id)
+
+    def _apply_alpha_cap(self, alpha: torch.Tensor, data: Data) -> torch.Tensor:
+        """Apply optional per-sensor upper bounds to the residual context gate."""
+        if not self.sensor_gate_enabled or self.alpha_max_by_sensor is None:
+            return alpha
+        n_nodes = alpha.size(0)
+        sensor_id = self._sensor_ids_for_nodes(data, n_nodes, alpha.device)
+        alpha_max = self.alpha_max_by_sensor.to(device=alpha.device, dtype=alpha.dtype)[sensor_id]
+        return alpha * alpha_max.unsqueeze(-1)
 
     def forward(self, data: Data) -> torch.Tensor:
         """
@@ -480,6 +939,65 @@ class SpectralGNN(nn.Module):
             edge_logit = None
             self._last_edge_conf = None
 
+        if self.phase_edge_bias is not None:
+            x_phase_edge = getattr(data, 'x_phase', None)
+            if x_phase_edge is None:
+                raise RuntimeError("phase_edge enabled but graph has no x_phase")
+            if torch.is_autocast_enabled():
+                x_phase_edge = x_phase_edge.to(torch.get_autocast_gpu_dtype())
+            phase_edge_logit = self.phase_edge_bias(x_phase_edge, edge_index, edge_type)
+            edge_logit = phase_edge_logit if edge_logit is None else edge_logit + phase_edge_logit
+            edge_value_gate = None
+            if self.phase_edge_value_scale > 0:
+                edge_value_gate = 1.0 + self.phase_edge_value_scale * torch.tanh(phase_edge_logit)
+            self._last_phase_edge_logit = phase_edge_logit.detach()
+            self._last_phase_edge_conf = torch.sigmoid(phase_edge_logit)
+        else:
+            self._last_phase_edge_logit = None
+            self._last_phase_edge_conf = None
+            edge_value_gate = None
+
+        if self.phase_alignment_bias is not None:
+            x_phase_align = getattr(data, 'x_phase', None)
+            if x_phase_align is None:
+                raise RuntimeError("phase_alignment_edge enabled but graph has no x_phase")
+            align_logit, align_feats = self.phase_alignment_bias(
+                x_phase_align.float(), edge_index, edge_type
+            )
+            edge_logit = align_logit if edge_logit is None else edge_logit + align_logit.to(edge_logit.dtype)
+            if self.phase_alignment_value_scale > 0:
+                align_value_gate = 1.0 + self.phase_alignment_value_scale * torch.tanh(align_logit)
+                edge_value_gate = (
+                    align_value_gate
+                    if edge_value_gate is None
+                    else edge_value_gate * align_value_gate.to(edge_value_gate.dtype)
+            )
+            self._last_phase_alignment_logit = align_logit.detach()
+            self._last_phase_alignment_conf = torch.sigmoid(align_logit)
+            self._last_phase_alignment_features = align_feats.detach()
+        else:
+            self._last_phase_alignment_logit = None
+            self._last_phase_alignment_conf = None
+            self._last_phase_alignment_features = None
+
+        # Closed-form coherence bias: deterministic, yaw-invariant, stacks additively.
+        if self.phase_coherence_bias is not None:
+            x_phase_coh = getattr(data, 'x_phase', None)
+            if x_phase_coh is None:
+                raise RuntimeError("phase_coherence enabled but graph has no x_phase")
+            # Coherence path runs in FP32 (FFT precision-sensitive).
+            coh_logit = self.phase_coherence_bias(
+                x_phase_coh.float(), edge_index, edge_type
+            )
+            if edge_logit is None:
+                edge_logit = coh_logit
+            else:
+                edge_logit = edge_logit + coh_logit.to(edge_logit.dtype)
+            self._last_phase_coherence_logit = coh_logit.detach()
+        else:
+            self._last_phase_coherence_logit = None
+        self._last_edge_logit = edge_logit.detach() if edge_logit is not None else None
+
         # Input projection: 256 -> 256
         h = self.input_proj(x)
         h = self.input_norm(h)
@@ -498,10 +1016,13 @@ class SpectralGNN(nn.Module):
             if self.gradient_checkpointing and self.training:
                 # Recompute conv intermediates during backward to save VRAM.
                 if edge_embed is not None and edge_logit is not None:
-                    def _conv_with_logit(h_in, ei, ea, el):
-                        return conv(h_in, ei, edge_attr=ea, edge_logit=el)
+                    def _conv_with_logit(h_in, ei, ea, el, ev):
+                        return conv(
+                            h_in, ei, edge_attr=ea,
+                            edge_logit=el, edge_value_gate=ev
+                        )
                     h = grad_checkpoint(
-                        _conv_with_logit, h, edge_index, edge_embed, edge_logit,
+                        _conv_with_logit, h, edge_index, edge_embed, edge_logit, edge_value_gate,
                         use_reentrant=False
                     )
                 elif edge_embed is not None:
@@ -516,9 +1037,13 @@ class SpectralGNN(nn.Module):
                     )
             else:
                 if edge_embed is not None:
-                    h = conv(h, edge_index, edge_attr=edge_embed, edge_logit=edge_logit)
+                    h = conv(
+                        h, edge_index, edge_attr=edge_embed,
+                        edge_logit=edge_logit,
+                        edge_value_gate=edge_value_gate,
+                    )
                 else:
-                    h = conv(h, edge_index)
+                    h = conv(h, edge_index, edge_value_gate=edge_value_gate)
 
             h = bn(h)
 
@@ -540,11 +1065,26 @@ class SpectralGNN(nn.Module):
 
         # Residual gate: scale ctx contribution per-node based on hidden state.
         if self.use_residual_gate and self.gate is not None:
-            alpha = torch.sigmoid(self.gate(h))  # (n_nodes, 1) in [0, 1]
+            alpha = torch.sigmoid(self.gate(self._gate_input(h, data)))  # (n_nodes, 1)
+            alpha = self._apply_alpha_cap(alpha, data)
             ctx_norm = alpha * ctx_norm
+            self._last_alpha_for_loss = alpha
             self._last_alpha = alpha.detach()
 
-        return torch.cat([raw_norm, ctx_norm], dim=-1)
+        parts = [raw_norm, ctx_norm]
+        if self.phase_projector is not None:
+            x_phase = getattr(data, 'x_phase', None)
+            if x_phase is None:
+                raise RuntimeError("phase_token enabled but graph has no x_phase")
+            if torch.is_autocast_enabled():
+                x_phase = x_phase.to(torch.get_autocast_gpu_dtype())
+            phase_norm = F.normalize(self.phase_projector(x_phase), p=2, dim=-1)
+            phase_alpha = torch.sigmoid(self.phase_logit)
+            phase_norm = phase_alpha * phase_norm
+            self._last_phase_alpha = phase_alpha.detach()
+            parts.append(phase_norm)
+
+        return torch.cat(parts, dim=-1)
 
     def forward_with_attention(self, data: Data) -> tuple:
         """
@@ -573,6 +1113,55 @@ class SpectralGNN(nn.Module):
         else:
             edge_embed = None
 
+        edge_logit = None
+        edge_value_gate = None
+        if self.phase_edge_bias is not None:
+            x_phase_edge = getattr(data, 'x_phase', None)
+            if x_phase_edge is None:
+                raise RuntimeError("phase_edge enabled but graph has no x_phase")
+            phase_edge_logit = self.phase_edge_bias(x_phase_edge, edge_index, edge_type)
+            edge_logit = phase_edge_logit
+            if self.phase_edge_value_scale > 0:
+                edge_value_gate = 1.0 + self.phase_edge_value_scale * torch.tanh(phase_edge_logit)
+            self._last_phase_edge_logit = phase_edge_logit.detach()
+            self._last_phase_edge_conf = torch.sigmoid(phase_edge_logit)
+
+        if self.phase_alignment_bias is not None:
+            x_phase_align = getattr(data, 'x_phase', None)
+            if x_phase_align is None:
+                raise RuntimeError("phase_alignment_edge enabled but graph has no x_phase")
+            align_logit, align_feats = self.phase_alignment_bias(
+                x_phase_align.float(), edge_index, edge_type
+            )
+            edge_logit = align_logit if edge_logit is None else edge_logit + align_logit.to(edge_logit.dtype)
+            if self.phase_alignment_value_scale > 0:
+                align_value_gate = 1.0 + self.phase_alignment_value_scale * torch.tanh(align_logit)
+                edge_value_gate = (
+                    align_value_gate
+                    if edge_value_gate is None
+                    else edge_value_gate * align_value_gate.to(edge_value_gate.dtype)
+            )
+            self._last_phase_alignment_logit = align_logit.detach()
+            self._last_phase_alignment_conf = torch.sigmoid(align_logit)
+            self._last_phase_alignment_features = align_feats.detach()
+        else:
+            self._last_phase_alignment_logit = None
+            self._last_phase_alignment_conf = None
+            self._last_phase_alignment_features = None
+
+        if self.phase_coherence_bias is not None:
+            x_phase_coh = getattr(data, 'x_phase', None)
+            if x_phase_coh is None:
+                raise RuntimeError("phase_coherence enabled but graph has no x_phase")
+            coh_logit = self.phase_coherence_bias(
+                x_phase_coh.float(), edge_index, edge_type
+            )
+            edge_logit = coh_logit if edge_logit is None else edge_logit + coh_logit.to(edge_logit.dtype)
+            self._last_phase_coherence_logit = coh_logit.detach()
+        else:
+            self._last_phase_coherence_logit = None
+        self._last_edge_logit = edge_logit.detach() if edge_logit is not None else None
+
         h = self.input_proj(x)
         h = self.input_norm(h)
         h = F.relu(h)
@@ -585,11 +1174,14 @@ class SpectralGNN(nn.Module):
             if edge_embed is not None:
                 h, (edge_idx, attn) = conv(
                     h, edge_index, edge_attr=edge_embed,
+                    edge_logit=edge_logit,
+                    edge_value_gate=edge_value_gate,
                     return_attention_weights=True
                 )
             else:
                 h, (edge_idx, attn) = conv(
-                    h, edge_index,
+                    h, edge_index, edge_logit=edge_logit,
+                    edge_value_gate=edge_value_gate,
                     return_attention_weights=True
                 )
             attention_weights.append((edge_idx, attn))
@@ -609,14 +1201,253 @@ class SpectralGNN(nn.Module):
         raw_norm = F.normalize(x_raw, p=2, dim=-1)
         ctx_norm = F.normalize(context, p=2, dim=-1)
         if self.use_residual_gate and self.gate is not None:
-            alpha = torch.sigmoid(self.gate(h))
+            alpha = torch.sigmoid(self.gate(self._gate_input(h, data)))
+            alpha = self._apply_alpha_cap(alpha, data)
             ctx_norm = alpha * ctx_norm
+            self._last_alpha_for_loss = alpha
             self._last_alpha = alpha.detach()
-        return torch.cat([raw_norm, ctx_norm], dim=-1), attention_weights
+        parts = [raw_norm, ctx_norm]
+        if self.phase_projector is not None:
+            x_phase = getattr(data, 'x_phase', None)
+            if x_phase is None:
+                raise RuntimeError("phase_token enabled but graph has no x_phase")
+            phase_norm = F.normalize(self.phase_projector(x_phase), p=2, dim=-1)
+            phase_alpha = torch.sigmoid(self.phase_logit)
+            phase_norm = phase_alpha * phase_norm
+            self._last_phase_alpha = phase_alpha.detach()
+            parts.append(phase_norm)
+        return torch.cat(parts, dim=-1), attention_weights
 
     def get_embedding_dim(self) -> int:
         """Get output embedding dimension (raw + context)"""
-        return self.input_dim + self.context_dim
+        return self.input_dim + self.context_dim + self.phase_token_dim
+
+
+class PhaseStreamGNN(nn.Module):
+    """Yaw-invariant phase context encoder (sibling of SpectralGNN's mag stream).
+
+    Two ``DiffAttnConv`` layers operating on yaw-invariant per-node phase
+    features (``log(1+|z|^2)`` plus optional bispectrum coefficients), output
+    a ``context_dim`` per-node vector. The conv operator is reused unchanged;
+    yaw-invariance comes from the inputs, not from a new attention primitive.
+    """
+
+    def __init__(
+        self,
+        phase_input_dim: int,
+        hidden_dim: int = 128,
+        context_dim: int = 128,
+        n_layers: int = 2,
+        n_heads: int = 4,
+        dropout: float = 0.1,
+        edge_encoder_config: Optional[dict] = None,
+        norm_type: str = "layer_norm",
+    ) -> None:
+        super().__init__()
+        self.phase_input_dim = int(phase_input_dim)
+        self.hidden_dim = int(hidden_dim)
+        self.context_dim = int(context_dim)
+
+        self.input_proj = nn.Linear(self.phase_input_dim, hidden_dim)
+        self.input_norm = SpectralGNN._make_norm(hidden_dim, norm_type)
+
+        if edge_encoder_config is not None:
+            self.edge_encoder = EdgeEncoder(**edge_encoder_config)
+            edge_dim = edge_encoder_config.get("d_edge", 32)
+        else:
+            self.edge_encoder = None
+            edge_dim = None
+
+        self.convs = nn.ModuleList()
+        self.norms = nn.ModuleList()
+        for _ in range(n_layers):
+            self.convs.append(
+                DiffAttnConv(
+                    channels=hidden_dim,
+                    heads=n_heads,
+                    edge_dim=edge_dim,
+                    dropout=dropout,
+                )
+            )
+            self.norms.append(SpectralGNN._make_norm(hidden_dim, norm_type))
+
+        self.output_proj = nn.Linear(hidden_dim, context_dim)
+        self.dropout = float(dropout)
+        self.n_layers = int(n_layers)
+
+    def forward(
+        self,
+        phase_x_inv: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_attr: Optional[torch.Tensor] = None,
+        edge_type: Optional[torch.Tensor] = None,
+        edge_logit: Optional[torch.Tensor] = None,
+        edge_value_gate: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        h = self.input_proj(phase_x_inv)
+        h = self.input_norm(h)
+        h = F.relu(h)
+
+        if self.edge_encoder is not None and edge_attr is not None and edge_type is not None:
+            edge_embed = self.edge_encoder(edge_attr, edge_type)
+        else:
+            edge_embed = None
+
+        for i, (conv, norm) in enumerate(zip(self.convs, self.norms)):
+            h_prev = h
+            h = conv(
+                h,
+                edge_index,
+                edge_attr=edge_embed,
+                edge_logit=edge_logit,
+                edge_value_gate=edge_value_gate,
+            )
+            h = norm(h)
+            if i < self.n_layers - 1:
+                h = F.relu(h)
+                h = F.dropout(h, p=self.dropout, training=self.training)
+            h = h + h_prev
+
+        return self.output_proj(h)
+
+
+class DualStreamSpectralGNN(nn.Module):
+    """Magnitude + phase dual-stream GNN with gated context fusion.
+
+    The magnitude stream is a regular :class:`SpectralGNN` on ``data.x`` (the
+    yaw-invariant 288D magnitude key); the phase stream is a
+    :class:`PhaseStreamGNN` on yaw-invariant features derived from
+    ``data.x_phase`` (``log(1+|z|^2)`` + optional bispectrum). Their context
+    vectors are mixed by a per-node gate ``α``::
+
+        ctx_fused = (1 - α) · ctx_mag + α · ctx_phase
+
+    so the model defaults to magnitude behaviour at init (``α ≈ initial_alpha``,
+    typically 0.1) and grows phase contribution when training finds it useful.
+
+    Output layout matches :meth:`SpectralGNN.forward`::
+
+        cat( raw_mag, ctx_fused, [optional phase_token tail from mag_gnn] )
+
+    Backward compat: pass ``data`` exactly as the magnitude stream expects;
+    the phase stream additionally consumes ``data.x_phase``.
+    """
+
+    def __init__(
+        self,
+        mag_gnn: "SpectralGNN",
+        phase_gnn: "PhaseStreamGNN",
+        n_rows: int,
+        n_freqs: int,
+        use_bispectrum: bool = True,
+        fuse_initial_alpha: float = 0.1,
+        fuse_per_node: bool = True,
+        fuse_hidden_dim: int = 64,
+        scale_phase_by_mag_gate: bool = True,
+    ) -> None:
+        super().__init__()
+        if mag_gnn.context_dim != phase_gnn.context_dim:
+            raise ValueError(
+                f"context_dim mismatch: mag={mag_gnn.context_dim}, "
+                f"phase={phase_gnn.context_dim}; fusion expects equal dims."
+            )
+        self.mag_gnn = mag_gnn
+        self.phase_gnn = phase_gnn
+        self.n_rows = int(n_rows)
+        self.n_freqs = int(n_freqs)
+        self.use_bispectrum = bool(use_bispectrum)
+        self.scale_phase_by_mag_gate = bool(scale_phase_by_mag_gate)
+
+        ctx_dim = mag_gnn.context_dim
+        init_alpha = float(min(max(fuse_initial_alpha, 1e-4), 1.0 - 1e-4))
+        init_logit = math.log(init_alpha / (1.0 - init_alpha))
+
+        self.fuse_per_node = bool(fuse_per_node)
+        if self.fuse_per_node:
+            self.fuse_gate = nn.Sequential(
+                nn.Linear(2 * ctx_dim, fuse_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(fuse_hidden_dim, 1),
+            )
+            nn.init.zeros_(self.fuse_gate[-1].weight)
+            nn.init.constant_(self.fuse_gate[-1].bias, init_logit)
+            self.fuse_logit = None
+        else:
+            self.fuse_gate = None
+            self.fuse_logit = nn.Parameter(torch.tensor(init_logit))
+
+        self._last_fuse_alpha: Optional[torch.Tensor] = None
+
+    def get_embedding_dim(self) -> int:
+        return self.mag_gnn.get_embedding_dim()
+
+    # Property forwards keep call-sites that introspect `base_gnn.input_dim` /
+    # `base_gnn.context_dim` working unchanged (see train_multi_dataset.py).
+    @property
+    def input_dim(self) -> int:
+        return self.mag_gnn.input_dim
+
+    @property
+    def context_dim(self) -> int:
+        return self.mag_gnn.context_dim
+
+    @property
+    def phase_token_dim(self) -> int:
+        return self.mag_gnn.phase_token_dim
+
+    def _phase_invariants(self, x_phase: torch.Tensor) -> torch.Tensor:
+        # Imported lazily to avoid circular imports at module load time.
+        from gnn.phase_diff_conv import phase_invariant_features
+
+        return phase_invariant_features(
+            x_phase.float(),
+            self.n_rows,
+            self.n_freqs,
+            use_bispectrum=self.use_bispectrum,
+        )
+
+    def forward(self, data: Data) -> torch.Tensor:
+        x_phase = getattr(data, "x_phase", None)
+        if x_phase is None:
+            raise RuntimeError("DualStreamSpectralGNN requires data.x_phase")
+
+        # ---- Magnitude stream (existing pipeline, unchanged) ----
+        mag_out = self.mag_gnn(data)
+        phase_edge_logit = getattr(self.mag_gnn, "_last_edge_logit", None)
+        mag_dim = self.mag_gnn.input_dim
+        ctx_dim = self.mag_gnn.context_dim
+        mag_raw = mag_out[..., :mag_dim]
+        mag_ctx = mag_out[..., mag_dim : mag_dim + ctx_dim]
+        tail = mag_out[..., mag_dim + ctx_dim :]                   # phase token, if any
+
+        # ---- Phase stream ----
+        phase_inv = self._phase_invariants(x_phase)
+        if torch.is_autocast_enabled():
+            phase_inv = phase_inv.to(torch.get_autocast_gpu_dtype())
+        ctx_phase_raw = self.phase_gnn(
+            phase_inv,
+            edge_index=data.edge_index,
+            edge_attr=getattr(data, "edge_attr", None),
+            edge_type=getattr(data, "edge_type", None),
+            edge_logit=phase_edge_logit,
+        )
+        ctx_phase = F.normalize(ctx_phase_raw, p=2, dim=-1)
+        if self.scale_phase_by_mag_gate:
+            mag_alpha = getattr(self.mag_gnn, "_last_alpha", None)
+            if mag_alpha is not None:
+                ctx_phase = mag_alpha.to(ctx_phase.dtype) * ctx_phase
+
+        # ---- Fuse ----
+        if self.fuse_gate is not None:
+            alpha = torch.sigmoid(
+                self.fuse_gate(torch.cat([mag_ctx, ctx_phase], dim=-1))
+            )                                                       # (N, 1)
+        else:
+            alpha = torch.sigmoid(self.fuse_logit)                  # ()
+        self._last_fuse_alpha = alpha.detach()
+        ctx_fused = (1.0 - alpha) * mag_ctx + alpha * ctx_phase
+
+        return torch.cat([mag_raw, ctx_fused, tail], dim=-1)
 
 
 class LocalUpdateGNN(nn.Module):
@@ -669,12 +1500,19 @@ def create_spectral_gnn(
     edge_encoder_config: dict = None,
     gradient_checkpointing: bool = True,
     spectral_policy: Optional[nn.Module] = None,
-        norm_type: str = 'batch_norm',
-        use_residual_gate: bool = False,
-        gate_hidden_dim: int = 64,
-        gate_initial_alpha: float = 0.5,
-        use_edge_confidence_gate: bool = False,
-        edge_gate_hidden_dim: int = 16,
+    norm_type: str = 'batch_norm',
+    use_residual_gate: bool = False,
+    gate_hidden_dim: int = 64,
+    gate_initial_alpha: float = 0.5,
+    use_edge_confidence_gate: bool = False,
+    edge_gate_hidden_dim: int = 16,
+    phase_token_config: Optional[dict] = None,
+    phase_edge_config: Optional[dict] = None,
+    phase_alignment_config: Optional[dict] = None,
+    phase_coherence_config: Optional[dict] = None,
+    dual_stream_config: Optional[dict] = None,
+    sensor_gate_config: Optional[dict] = None,
+    diffattn_value_source: str = "diff",
 ) -> nn.Module:
     """
     Factory function to create GNN model
@@ -715,7 +1553,46 @@ def create_spectral_gnn(
         gate_initial_alpha=gate_initial_alpha,
         use_edge_confidence_gate=use_edge_confidence_gate,
         edge_gate_hidden_dim=edge_gate_hidden_dim,
+        phase_token_config=phase_token_config,
+        phase_edge_config=phase_edge_config,
+        phase_alignment_config=phase_alignment_config,
+        phase_coherence_config=phase_coherence_config,
+        sensor_gate_config=sensor_gate_config,
+        diffattn_value_source=diffattn_value_source,
     )
+
+    # Optional dual-stream wrapper: magnitude (existing) + phase (yaw-invariant)
+    # streams with gated context fusion. The magnitude SpectralGNN above is
+    # reused as-is; only ctx_mag is fused with ctx_phase.
+    if dual_stream_config is not None and dual_stream_config.get("enabled", False):
+        from gnn.phase_diff_conv import feature_dim as _phase_feature_dim
+
+        ds = dual_stream_config
+        n_rows = int(ds["n_rows"])
+        n_freqs = int(ds["n_freqs"])
+        use_bispectrum = bool(ds.get("use_bispectrum", True))
+        phase_input_dim = _phase_feature_dim(n_rows, n_freqs, use_bispectrum)
+        phase_gnn = PhaseStreamGNN(
+            phase_input_dim=phase_input_dim,
+            hidden_dim=int(ds.get("hidden_dim", 128)),
+            context_dim=int(ds.get("context_dim", context_dim)),
+            n_layers=int(ds.get("n_layers", 2)),
+            n_heads=int(ds.get("n_heads", n_heads)),
+            dropout=float(ds.get("dropout", dropout)),
+            edge_encoder_config=ds.get("edge_encoder_config"),
+            norm_type=str(ds.get("norm_type", "layer_norm")),
+        )
+        base_gnn = DualStreamSpectralGNN(
+            mag_gnn=base_gnn,
+            phase_gnn=phase_gnn,
+            n_rows=n_rows,
+            n_freqs=n_freqs,
+            use_bispectrum=use_bispectrum,
+            fuse_initial_alpha=float(ds.get("fuse_initial_alpha", 0.1)),
+            fuse_per_node=bool(ds.get("fuse_per_node", True)),
+            fuse_hidden_dim=int(ds.get("fuse_hidden_dim", 64)),
+            scale_phase_by_mag_gate=bool(ds.get("scale_phase_by_mag_gate", True)),
+        )
 
     if use_local_updates:
         return LocalUpdateGNN(base_gnn, k_hops=local_update_hops)

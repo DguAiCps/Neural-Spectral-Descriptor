@@ -174,7 +174,9 @@ class NeuralSpectralCodecPipeline:
             n_heads=self.config['gnn'].get('n_heads', 4),
             dropout=self.config['gnn']['dropout'],
             use_local_updates=self.config['gnn']['use_local_updates'],
-            local_update_hops=self.config['gnn']['local_update_hops']
+            local_update_hops=self.config['gnn']['local_update_hops'],
+            sensor_gate_config=self.config['gnn'].get('sensor_gate'),
+            diffattn_value_source=self.config['gnn'].get('diffattn_value_source', 'diff'),
         )
 
         # Create trainer
@@ -385,7 +387,9 @@ class NeuralSpectralCodecPipeline:
                 hidden_dim=self.config['gnn']['hidden_dim'],
                 context_dim=self.config['gnn']['context_dim'],
                 n_layers=self.config['gnn']['n_layers'],
-                n_heads=self.config['gnn'].get('n_heads', 4)
+                n_heads=self.config['gnn'].get('n_heads', 4),
+                sensor_gate_config=self.config['gnn'].get('sensor_gate'),
+                diffattn_value_source=self.config['gnn'].get('diffattn_value_source', 'diff'),
             )
 
         # Load checkpoint

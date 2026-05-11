@@ -107,7 +107,11 @@ def _project_nsd_layout(
     image_2d, _ = encoder.projector.project(points, keep_intensity=False)
     if encoder.interpolate_empty:
         if encoder.projection_type == "bev":
-            image_2d = interpolate_bev_image(image_2d, method="linear")
+            image_2d = interpolate_bev_image(
+                image_2d,
+                method="linear",
+                n_channels=getattr(encoder, "bev_n_channels", 1),
+            )
         else:
             image_2d = interpolate_range_image(image_2d, method="linear")
 

@@ -36,6 +36,7 @@ class Keyframe:
     embedding: Optional[np.ndarray] = None  # GNN embedding (set later)
     spectral_entropy: Optional[float] = None  # Shannon entropy of FFT magnitudes (set later)
     fft_magnitudes: Optional[np.ndarray] = None  # (n_rows, n_freqs) FFT magnitude spectrum (set later)
+    phase_features: Optional[np.ndarray] = None  # Learned phase-token input features (set later)
 
 
 class KeyframeSelector:

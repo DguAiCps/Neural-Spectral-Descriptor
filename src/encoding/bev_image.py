@@ -14,7 +14,11 @@ import numpy as np
 from typing import Tuple, Optional
 
 
-def interpolate_bev_image(bev_image: np.ndarray, method: str = 'linear') -> np.ndarray:
+def interpolate_bev_image(
+    bev_image: np.ndarray,
+    method: str = 'linear',
+    n_channels: int = 1,
+) -> np.ndarray:
     """
     Interpolate empty cells (zeros) in BEV image along sector (azimuth) direction.
 
@@ -24,12 +28,20 @@ def interpolate_bev_image(bev_image: np.ndarray, method: str = 'linear') -> np.n
     Args:
         bev_image: (n_rings, n_sectors) BEV image with 0 for empty cells
         method: 'linear' (sector direction, circular) or 'nearest'
+        n_channels: Number of row-stacked physical channels. For physics3 this
+            must be 3 so empty-ring copying never crosses channel boundaries.
 
     Returns:
         Interpolated BEV image with no empty cells
     """
     result = bev_image.copy()
     n_rings, n_sectors = bev_image.shape
+    n_channels = max(1, int(n_channels))
+    if n_rings % n_channels != 0:
+        raise ValueError(
+            f"BEV rows ({n_rings}) must be divisible by n_channels={n_channels}"
+        )
+    rows_per_channel = n_rings // n_channels
 
     for row in range(n_rings):
         row_data = result[row]
@@ -65,16 +77,20 @@ def interpolate_bev_image(bev_image: np.ndarray, method: str = 'linear') -> np.n
                 nearest_valid = valid_indices[np.argmin(distances)]
                 result[row, idx] = row_data[nearest_valid]
 
-    # Handle completely empty rings by copying from nearest non-empty ring
-    for row in range(n_rings):
-        if not np.any(result[row] != 0):
-            for offset in range(1, n_rings):
-                if row - offset >= 0 and np.any(result[row - offset] != 0):
-                    result[row] = result[row - offset]
-                    break
-                if row + offset < n_rings and np.any(result[row + offset] != 0):
-                    result[row] = result[row + offset]
-                    break
+    # Handle completely empty rings by copying from nearest non-empty ring, but
+    # never cross row-stacked channel boundaries (critical for physics3).
+    for ch in range(n_channels):
+        start = ch * rows_per_channel
+        end = start + rows_per_channel
+        for row in range(start, end):
+            if not np.any(result[row] != 0):
+                for offset in range(1, rows_per_channel):
+                    if row - offset >= start and np.any(result[row - offset] != 0):
+                        result[row] = result[row - offset]
+                        break
+                    if row + offset < end and np.any(result[row + offset] != 0):
+                        result[row] = result[row + offset]
+                        break
 
     return result
 
@@ -136,9 +152,13 @@ class BEVProjector:
             keep_intensity: Ignored (interface compatibility)
 
         Returns:
-            bev_image: (n_rings, n_sectors) values per cell
+            bev_image: (n_rings, n_sectors) values per cell, or
+                (3 * n_rings, n_sectors) for 'physics3'
                 - 'max': max z-height (float)
                 - 'iris': binary height code 0~2^n_height_layers-1 (float)
+                - 'physics3': stacked [normalized max height, log occupancy
+                  density, normalized vertical span]. This keeps deterministic
+                  physical sensor cues without learning an encoder.
             None (no intensity image for BEV)
         """
         xyz = points[:, :3]
@@ -177,6 +197,8 @@ class BEVProjector:
 
         if self.height_encoding == 'iris':
             return self._project_iris(xyz, ring_idx, sector_idx), None
+        elif self.height_encoding == 'physics3':
+            return self._project_physics3(xyz, ring_idx, sector_idx), None
         else:
             return self._project_max_height(xyz, ring_idx, sector_idx), None
 
@@ -234,3 +256,63 @@ class BEVProjector:
 
         bev_image = flat_bev.reshape(self.n_rings, self.n_sectors).astype(np.float32)
         return bev_image
+
+    def _project_physics3(
+        self,
+        xyz: np.ndarray,
+        ring_idx: np.ndarray,
+        sector_idx: np.ndarray,
+    ) -> np.ndarray:
+        """Stack three deterministic physical BEV channels.
+
+        The goal is to mimic part of multi-sensor fine-tuning with domain
+        knowledge instead of a large learned encoder:
+        - max height: geometry/structure cue;
+        - occupancy density: sampling/visibility cue, normalized by polar cell
+          area so sparse sensors are less biased toward near-range returns;
+        - vertical span: object/vegetation/building thickness cue independent of
+          absolute ground height.
+
+        The channels are row-stacked as ``(3 * n_rings, n_sectors)`` so all
+        existing FFT/phase-sketch code can consume them unchanged. Use
+        ``bev_row_pool=48`` and ``bev_freqs=4`` to keep the 384D phase budget:
+        ``48 rows * 4 freqs * 2 = 384``.
+        """
+        n_cells = self.n_rings * self.n_sectors
+        linear_idx = ring_idx * self.n_sectors + sector_idx
+        z = xyz[:, 2].astype(np.float32)
+
+        flat_max = np.full(n_cells, -np.inf, dtype=np.float32)
+        flat_min = np.full(n_cells, np.inf, dtype=np.float32)
+        flat_count = np.zeros(n_cells, dtype=np.float32)
+        np.maximum.at(flat_max, linear_idx, z)
+        np.minimum.at(flat_min, linear_idx, z)
+        np.add.at(flat_count, linear_idx, 1.0)
+
+        occupied = flat_count > 0
+        flat_max[~occupied] = 0.0
+        flat_min[~occupied] = 0.0
+
+        height = np.zeros(n_cells, dtype=np.float32)
+        span = np.zeros(n_cells, dtype=np.float32)
+        z_range = max(float(self.z_max - self.z_min), 1e-6)
+        height[occupied] = np.clip((flat_max[occupied] - self.z_min) / z_range, 0.0, 1.0)
+        span[occupied] = np.clip((flat_max[occupied] - flat_min[occupied]) / z_range, 0.0, 1.0)
+
+        # Polar cells cover larger physical area at larger radius. Divide by
+        # ring radius to turn raw point count into a rough sampling density.
+        ring_centers = self.min_range + np.arange(self.n_rings, dtype=np.float32) + 0.5
+        density_norm = np.repeat(ring_centers, self.n_sectors)
+        density = np.log1p(flat_count / np.maximum(density_norm, 1.0)).astype(np.float32)
+        if density.max() > 0:
+            density = density / density.max()
+
+        stacked = np.stack(
+            [
+                height.reshape(self.n_rings, self.n_sectors),
+                density.reshape(self.n_rings, self.n_sectors),
+                span.reshape(self.n_rings, self.n_sectors),
+            ],
+            axis=0,
+        )
+        return stacked.reshape(3 * self.n_rings, self.n_sectors).astype(np.float32)

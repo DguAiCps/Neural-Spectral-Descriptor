@@ -1,25 +1,32 @@
-# KITTI-only configuration for urgent execution/debug experiments.
-# Uses the same encoder/GNN dimensions as the paper config (544D raw + 128D ctx).
+# Fast compact fine-tune for KITTI + NCLT.
+# Use with:
+#   CUDA_VISIBLE_DEVICES=3 python3 train_multi_dataset.py \
+#     --config configs/training_kitti_nclt_compact_fast.yaml \
+#     --encoder-preset no_interdiff --use-gated-context --gate-initial-alpha 0.0625
 
 data:
   lazy_load: true
-  cache_dir: data/preprocessed_kitti
+  cache_dir: data/preprocessed_kitti_nclt_compact_fast
   datasets:
     train:
       - type: kitti
         root: /rise/RISE1/workspace/data/kitti/dataset
         sequences: ['01', '02', '06', '07']
         weight: 1.0
+      - type: nclt
+        root: /rise/RISE1/workspace/data/nclt
+        sequences: ['2012-05-11']
+        weight: 1.0
     val:
       - type: kitti
         root: /rise/RISE1/workspace/data/kitti/dataset
         sequences: ['00', '05', '08']
         weight: 1.0
-    test:
-      - type: kitti
-        root: /rise/RISE1/workspace/data/kitti/dataset
-        sequences: ['09', '10']
+      - type: nclt
+        root: /rise/RISE1/workspace/data/nclt
+        sequences: ['2012-01-08', '2013-01-10']
         weight: 1.0
+    test: []
 
 encoding:
   projection_type: 'range_image'
@@ -31,6 +38,7 @@ encoding:
   target_elevation_bins: 16
   sensor_elevation_ranges:
     kitti: [-24.8, 2.0]
+    nclt: [-30.67, 10.67]
   bev:
     z_min: -3.0
     height_encoding: 'iris'
@@ -47,30 +55,7 @@ encoding:
   log_magnitude: false
   normalize_channels: false
   spectral_policy:
-    enabled: true
-    type: 'soft_binning'
-    output_dim: 544
-    shared_across_rings: false
-    soft_binning:
-      n_soft_bins: 9
-      stats: ['mean', 'std']
-      inter_stats: ['diff']
-      init_mode: 'octave'
-      alpha: 2.0
-    linear:
-      d_per_ring: 14
-    conv1d:
-      channels_per_group: 2
-      kernel_size: 7
-    attention:
-      n_queries: 7
-      n_heads: 2
-      head_dim: 32
-      d_pe: 16
-    gated:
-      gate_hidden: 64
-    lr_scale: 0.1
-    warmup_epochs: 3
+    enabled: false
   quantization_bits: 16
   descriptor_size: 544
 
@@ -130,7 +115,7 @@ gnn:
   local_update_hops: 3
   use_local_updates: true
   use_multi_gpu: false
-  patience: 10
+  patience: 6
 
 retrieval:
   top_k: 10
@@ -153,14 +138,14 @@ system:
 
 logging:
   use_wandb: false
-  wandb_project: neural-spectral-codec-kitti
+  wandb_project: neural-spectral-codec-kitti-nclt-fast
   wandb_entity: null
   log_interval: 10
   save_interval: 1000
 
 training:
-  resume_from_checkpoint: results/ctx128_cosine_bayesian/best_model.pth
-  n_epochs: 60
+  resume_from_checkpoint: null
+  n_epochs: 24
   learning_rate: 5.0e-04
   weight_decay: 1.0e-05
   temperature: 0.1
