@@ -917,8 +917,13 @@ class GNNTrainer:
 
         # 4. Refit Bayesian distribution on new subspace
         similarity_metric = edge_kwargs.get('similarity_metric', 'l2')
+        graph_sequence_ids = None
+        if hasattr(graph, 'sequence_ids'):
+            graph_sequence_ids = graph.sequence_ids.detach().cpu().numpy()
+
         new_dist = SimilarityDistribution(metric=similarity_metric).fit(
             refine_descs_std, poses,
+            sequence_ids=graph_sequence_ids,
             pos_dist=fit_kwargs.get('pos_dist', 5.0),
             neg_dist=fit_kwargs.get('neg_dist', 10.0),
             min_temporal_gap=fit_kwargs.get('min_temporal_gap', 30),
@@ -1312,9 +1317,11 @@ class GNNTrainer:
         triplet_miner: Optional[TripletMiner] = None,
         mine_every_n_epochs: int = 1,
         validate_every_n_epochs: int = 1,
+        n_triplets_per_anchor: int = 1,
         two_pass_cfg: Optional[Dict] = None,
         refine_edge_kwargs: Optional[Dict] = None,
         refine_fit_kwargs: Optional[Dict] = None,
+        temperature_schedule: Optional[Dict] = None,
     ):
         """
         Full training loop
@@ -1329,6 +1336,8 @@ class GNNTrainer:
             triplet_miner: Triplet miner (created if None)
             mine_every_n_epochs: Re-mine triplets every N epochs (cache between)
             validate_every_n_epochs: Run validation every N epochs
+            n_triplets_per_anchor: Number of mined triplets per anchor
+            temperature_schedule: Optional linear InfoNCE temperature schedule
         """
         if triplet_miner is None:
             from gnn.triplet_miner import create_triplet_miner
@@ -1352,8 +1361,22 @@ class GNNTrainer:
         logging.info(f"LR scheduler: {n_warmup}-epoch warmup → cosine decay (eta_min=1e-6)")
         if mine_every_n_epochs > 1:
             logging.info(f"Triplet mining cache: re-mine every {mine_every_n_epochs} epochs")
+        logging.info(f"Triplet mining: {n_triplets_per_anchor} triplets/anchor")
         if validate_every_n_epochs > 1:
             logging.info(f"Validation frequency: every {validate_every_n_epochs} epochs")
+
+        temp_schedule = dict(temperature_schedule or {})
+        temp_schedule_enabled = (
+            bool(temp_schedule.get('enabled', False))
+            and hasattr(self.criterion, 'temperature')
+        )
+        if temp_schedule_enabled:
+            temp_start = float(temp_schedule.get('start', self.criterion.temperature))
+            temp_end = float(temp_schedule.get('end', self.criterion.temperature))
+            logging.info(
+                f"InfoNCE temperature schedule: {temp_start:.4f} -> {temp_end:.4f} "
+                f"over {n_epochs} epochs"
+            )
 
         # Two-pass similarity edge refinement setup
         two_pass_enabled = bool(two_pass_cfg and two_pass_cfg.get('enabled', False))
@@ -1371,6 +1394,11 @@ class GNNTrainer:
         for epoch in range(n_epochs):
             self.epoch = epoch
             epoch_start = time.perf_counter()
+
+            if temp_schedule_enabled:
+                progress = epoch / max(n_epochs - 1, 1)
+                self.criterion.temperature = temp_start + (temp_end - temp_start) * progress
+                logging.info(f"InfoNCE temperature: {self.criterion.temperature:.4f}")
 
             # Two-pass: refine similarity edges before this epoch
             if (two_pass_enabled
@@ -1390,6 +1418,7 @@ class GNNTrainer:
                 train_poses,
                 train_descriptors,
                 sequence_ids=train_sequence_ids,
+                n_triplets_per_anchor=n_triplets_per_anchor,
                 mine_every_n_epochs=mine_every_n_epochs,
             )
             train_time = time.perf_counter() - epoch_start

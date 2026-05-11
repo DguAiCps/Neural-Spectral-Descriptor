@@ -6,13 +6,14 @@ Implements the core Neural Spectral Codec algorithm:
    - 'range_image': panoramic range image (n_elevation × 360), pooled to target_elevation_bins
    - 'bev': BEV polar grid (n_rings × 360) with 1m radial × 1° angular resolution
 2. Apply row-wise 1D FFT along azimuth for rotation invariance
-3. Aggregate FFT magnitudes into per-row histograms via exponential binning
+3. Aggregate FFT magnitudes into per-row histograms via octave or exponential binning
 4. Normalize and prepare for quantization
 
 Key features:
 - Rotation invariance via magnitude spectrum (phase discarded)
 - Per-row histogram preserves spatial information
-- Adaptive exponential frequency binning (learnable α parameter)
+- Closed-form octave binning for the paper configuration
+- Optional legacy exponential frequency binning (learnable α only in that mode)
 - BEV mode: sensor-agnostic (no elevation calibration needed)
 """
 
@@ -22,6 +23,10 @@ import torch.nn as nn
 from typing import List, Tuple, Optional
 from encoding.range_image import RangeImageProjector, interpolate_range_image
 from encoding.bev_image import BEVProjector, interpolate_bev_image
+from encoding.cross_spectrum import (
+    adjacent_cross_spectrum_dim,
+    normalized_adjacent_cross_spectrum,
+)
 
 
 VALID_BIN_STATISTICS = ('sum', 'mean', 'std', 'max', 'min')
@@ -64,7 +69,9 @@ class SpectralEncoder(nn.Module):
         zero_center: bool = False,
         log_magnitude: bool = False,
         binning_strategy: str = 'exponential',
-        normalize_channels: bool = True
+        normalize_channels: bool = True,
+        cross_spectrum_enabled: bool = False,
+        cross_spectrum_n_freqs: int = 0,
     ):
         """
         Initialize spectral encoder
@@ -73,8 +80,9 @@ class SpectralEncoder(nn.Module):
             n_elevation: Number of elevation rings (64 for HDL-64E)
             n_azimuth: Number of azimuth bins (360 for 1-degree resolution)
             n_bins: Number of histogram bins (16 for target compression)
-            alpha: Exponential warping parameter for frequency binning
-            learnable_alpha: If True, α is learned during training
+            alpha: Exponential warping parameter for legacy frequency binning.
+                Ignored by octave binning except as a non-trainable device buffer.
+            learnable_alpha: If True, α is learned in exponential mode only.
             epsilon: Small constant for numerical stability
             target_elevation_bins: Target elevation bins for sensor-agnostic binning (16 for compatibility)
             interpolate_empty: If True, interpolate empty pixels before FFT (critical for sensor invariance)
@@ -95,6 +103,10 @@ class SpectralEncoder(nn.Module):
             binning_strategy: 'exponential' (alpha-warped) or 'octave' (log2 scale, auto n_bins)
             normalize_channels: If True, apply per-channel L2 normalization (default).
                 Set False to preserve magnitude for standardized Euclidean distance edges.
+            cross_spectrum_enabled: Append normalized adjacent-row cross-spectrum
+                features. These preserve relative phase while remaining yaw-invariant.
+            cross_spectrum_n_freqs: Number of non-DC low frequencies to keep for
+                adjacent-row cross-spectrum features.
         """
         super().__init__()
 
@@ -120,6 +132,8 @@ class SpectralEncoder(nn.Module):
         self.projection_type = projection_type
         self.zero_center = zero_center
         self.log_magnitude = log_magnitude
+        self.cross_spectrum_enabled = cross_spectrum_enabled
+        self.cross_spectrum_n_freqs = int(cross_spectrum_n_freqs)
 
         # Validate and store bin statistics
         if bin_statistics is None:
@@ -139,8 +153,11 @@ class SpectralEncoder(nn.Module):
         self.inter_bin_statistics = inter_bin_statistics
         self.n_inter_stats = len(inter_bin_statistics)
 
-        # Learnable alpha parameter
-        if learnable_alpha:
+        # In octave mode the encoder is fully closed-form. Keep `alpha` as a
+        # buffer for checkpoint/device compatibility, but never train it.
+        if binning_strategy == 'octave':
+            self.register_buffer('alpha', torch.tensor(alpha, dtype=torch.float32))
+        elif learnable_alpha:
             self.alpha = nn.Parameter(torch.tensor(alpha, dtype=torch.float32))
         else:
             self.register_buffer('alpha', torch.tensor(alpha, dtype=torch.float32))
@@ -174,8 +191,13 @@ class SpectralEncoder(nn.Module):
         # Output dimension: rows × bins × statistics
         self.base_dim = self.target_elevation_bins * self.n_bins
         self.inter_base_dim = self.target_elevation_bins * (self.n_bins - 1)
+        self.cross_spectrum_dim = (
+            adjacent_cross_spectrum_dim(self.target_elevation_bins, self.cross_spectrum_n_freqs)
+            if self.cross_spectrum_enabled else 0
+        )
         self.output_dim = (self.base_dim * self.n_stats
-                           + self.inter_base_dim * self.n_inter_stats * self.n_stats)
+                           + self.inter_base_dim * self.n_inter_stats * self.n_stats
+                           + self.cross_spectrum_dim)
 
     def set_elevation_range(self, elevation_range: tuple):
         """Update elevation range for a different sensor (no-op for BEV)"""
@@ -354,6 +376,14 @@ class SpectralEncoder(nn.Module):
         # Apply row-wise 1D FFT along azimuth dimension
         fft_output = torch.fft.rfft(projected_image, dim=1, norm='ortho')
 
+        cross_features = None
+        if self.cross_spectrum_enabled:
+            cross_features = normalized_adjacent_cross_spectrum(
+                fft_output,
+                n_freqs=self.cross_spectrum_n_freqs,
+                eps=self.epsilon,
+            )
+
         # Take magnitude (discard phase for rotation invariance)
         fft_magnitudes = torch.abs(fft_output)  # (target_elevation_bins, n_freqs)
 
@@ -374,6 +404,8 @@ class SpectralEncoder(nn.Module):
 
         # Bin FFT magnitudes into per-elevation histograms
         histogram = self._bin_fft_magnitudes(fft_magnitudes, bin_edges)
+        if cross_features is not None:
+            histogram = torch.cat([histogram, cross_features], dim=0)
         # histogram shape: (output_dim,) = intra channels + inter channels
 
         # Normalization
@@ -391,6 +423,7 @@ class SpectralEncoder(nn.Module):
             channel_dims = (
                 [self.base_dim] * self.n_stats
                 + [self.inter_base_dim] * (self.n_inter_stats * self.n_stats)
+                + ([self.cross_spectrum_dim] if self.cross_spectrum_dim > 0 else [])
             )
             normalized = []
             offset = 0

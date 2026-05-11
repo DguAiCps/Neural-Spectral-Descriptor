@@ -330,6 +330,7 @@ class SpectralGNN(nn.Module):
         norm_type: str = 'batch_norm',
         use_residual_gate: bool = False,
         gate_hidden_dim: int = 64,
+        gate_initial_alpha: float = 0.5,
         use_edge_confidence_gate: bool = False,
         edge_gate_hidden_dim: int = 16,
     ):
@@ -391,9 +392,15 @@ class SpectralGNN(nn.Module):
                 nn.ReLU(),
                 nn.Linear(gate_hidden_dim, 1),
             )
-            # Init last layer to zero → sigmoid(0)=0.5 (neutral start, partial ctx).
+            # Initialize to a controlled context weight. KITTI ablations show
+            # equal raw/context weighting can degrade retrieval; small alpha
+            # lets the model add context only when useful.
             nn.init.zeros_(self.gate[-1].weight)
-            nn.init.zeros_(self.gate[-1].bias)
+            gate_initial_alpha = float(min(max(gate_initial_alpha, 1e-4), 1.0 - 1e-4))
+            nn.init.constant_(
+                self.gate[-1].bias,
+                math.log(gate_initial_alpha / (1.0 - gate_initial_alpha)),
+            )
         else:
             self.gate = None
 
@@ -601,6 +608,10 @@ class SpectralGNN(nn.Module):
         # L2 normalize each part so both contribute equally to distance metrics
         raw_norm = F.normalize(x_raw, p=2, dim=-1)
         ctx_norm = F.normalize(context, p=2, dim=-1)
+        if self.use_residual_gate and self.gate is not None:
+            alpha = torch.sigmoid(self.gate(h))
+            ctx_norm = alpha * ctx_norm
+            self._last_alpha = alpha.detach()
         return torch.cat([raw_norm, ctx_norm], dim=-1), attention_weights
 
     def get_embedding_dim(self) -> int:
@@ -658,11 +669,12 @@ def create_spectral_gnn(
     edge_encoder_config: dict = None,
     gradient_checkpointing: bool = True,
     spectral_policy: Optional[nn.Module] = None,
-    norm_type: str = 'batch_norm',
-    use_residual_gate: bool = False,
-    gate_hidden_dim: int = 64,
-    use_edge_confidence_gate: bool = False,
-    edge_gate_hidden_dim: int = 16,
+        norm_type: str = 'batch_norm',
+        use_residual_gate: bool = False,
+        gate_hidden_dim: int = 64,
+        gate_initial_alpha: float = 0.5,
+        use_edge_confidence_gate: bool = False,
+        edge_gate_hidden_dim: int = 16,
 ) -> nn.Module:
     """
     Factory function to create GNN model
@@ -700,6 +712,7 @@ def create_spectral_gnn(
         norm_type=norm_type,
         use_residual_gate=use_residual_gate,
         gate_hidden_dim=gate_hidden_dim,
+        gate_initial_alpha=gate_initial_alpha,
         use_edge_confidence_gate=use_edge_confidence_gate,
         edge_gate_hidden_dim=edge_gate_hidden_dim,
     )

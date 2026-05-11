@@ -142,6 +142,51 @@ def load_config(config_path):
         return yaml.safe_load(f)
 
 
+def apply_encoder_preset(config, preset):
+    """Apply compact closed-form encoder presets shared with fast KITTI eval."""
+    enc = config['encoding']
+    gnn = config['gnn']
+    if preset == 'full':
+        return config
+
+    enc.setdefault('spectral_policy', {})['enabled'] = False
+    enc['binning_strategy'] = 'octave'
+    enc['zero_center'] = False
+    enc['cross_spectrum'] = {'enabled': False, 'n_freqs': 0}
+
+    if preset == 'no_interdiff':
+        enc['target_elevation_bins'] = 16
+        enc['bin_statistics'] = ['mean', 'std']
+        enc['inter_bin_statistics'] = []
+        gnn['input_dim'] = 16 * 9 * 2
+    elif preset == 'cross4_no_interdiff':
+        enc['target_elevation_bins'] = 16
+        enc['bin_statistics'] = ['mean', 'std']
+        enc['inter_bin_statistics'] = []
+        enc['cross_spectrum'] = {'enabled': True, 'n_freqs': 4}
+        gnn['input_dim'] = 16 * 9 * 2 + 15 * 4 * 2
+    elif preset == 'cross8_no_interdiff':
+        enc['target_elevation_bins'] = 16
+        enc['bin_statistics'] = ['mean', 'std']
+        enc['inter_bin_statistics'] = []
+        enc['cross_spectrum'] = {'enabled': True, 'n_freqs': 8}
+        gnn['input_dim'] = 16 * 9 * 2 + 15 * 8 * 2
+    elif preset == 'mean_diff':
+        enc['target_elevation_bins'] = 16
+        enc['bin_statistics'] = ['mean']
+        enc['inter_bin_statistics'] = ['diff']
+        gnn['input_dim'] = 16 * (9 + 8)
+    elif preset == 'rows12_full':
+        enc['target_elevation_bins'] = 12
+        enc['bin_statistics'] = ['mean', 'std']
+        enc['inter_bin_statistics'] = ['diff']
+        gnn['input_dim'] = 12 * (9 * 2 + 8 * 2)
+    else:
+        raise ValueError(f"Unknown encoder preset: {preset}")
+
+    return config
+
+
 def get_elevation_range(config, dataset_type):
     """Get sensor-specific elevation range, falling back to default"""
     sensor_ranges = config['encoding'].get('sensor_elevation_ranges', {})
@@ -176,6 +221,7 @@ def compute_cache_key(config, dataset_type=None):
         'log_magnitude': enc.get('log_magnitude', False),
         'normalize_channels': enc.get('normalize_channels', True),
         'spectral_policy_enabled': enc.get('spectral_policy', {}).get('enabled', False),
+        'cross_spectrum': enc.get('cross_spectrum', {}),
     }
     # Alpha affects bin edges for exponential strategy (octave ignores it)
     if key_params['binning_strategy'] != 'octave':
@@ -369,6 +415,26 @@ def main():
                         help='Directory for per-query JSON dumps (validate-only mode)')
     parser.add_argument('--seed', type=int, default=None,
                         help='Random seed for numpy/torch/cuda (default: nondeterministic)')
+    parser.add_argument('--resume-checkpoint', type=str, default=None,
+                        help='Optional model checkpoint to preload for fine-tuning')
+    parser.add_argument(
+        '--encoder-preset',
+        type=str,
+        default='full',
+        choices=[
+            'full',
+            'no_interdiff',
+            'cross4_no_interdiff',
+            'cross8_no_interdiff',
+            'mean_diff',
+            'rows12_full',
+        ],
+        help='Closed-form encoder compression preset for ablation training',
+    )
+    parser.add_argument('--use-gated-context', action='store_true',
+                        help='Enable learned alpha gate on GAT context output')
+    parser.add_argument('--gate-initial-alpha', type=float, default=None,
+                        help='Initial sigmoid alpha for learned context gate')
     args = parser.parse_args()
 
     # Setup
@@ -403,7 +469,20 @@ def main():
 
     # Load config
     logging.info(f"Loading configuration from: {config_path}")
-    config = load_config(config_path)
+    config = apply_encoder_preset(load_config(config_path), args.encoder_preset)
+    if args.encoder_preset != 'full':
+        logging.info(f"Applied encoder preset: {args.encoder_preset}")
+        if args.resume_checkpoint is None:
+            config.get('training', {})['resume_from_checkpoint'] = None
+            logging.info("Disabled config resume checkpoint for non-full encoder preset")
+    if args.use_gated_context:
+        config['gnn']['use_residual_gate'] = True
+        if args.gate_initial_alpha is not None:
+            config['gnn']['gate_initial_alpha'] = args.gate_initial_alpha
+        logging.info(
+            "Enabled learned context gate "
+            f"(initial_alpha={config['gnn'].get('gate_initial_alpha', 0.5)})"
+        )
 
     # Log config summary
     logging.info(f"  n_elevation: {config['encoding']['n_elevation']}")
@@ -432,6 +511,7 @@ def main():
         projection_type = config['encoding'].get('projection_type', 'range_image')
         bev_config = config['encoding'].get('bev', {})
         normalize_channels = config['encoding'].get('normalize_channels', True)
+        cross_cfg = config['encoding'].get('cross_spectrum', {})
         encoder = SpectralEncoder(
             n_elevation=config['encoding']['n_elevation'],
             n_azimuth=config['encoding']['n_azimuth'],
@@ -453,6 +533,8 @@ def main():
             log_magnitude=config['encoding'].get('log_magnitude', False),
             binning_strategy=config['encoding'].get('binning_strategy', 'exponential'),
             normalize_channels=normalize_channels,
+            cross_spectrum_enabled=cross_cfg.get('enabled', False),
+            cross_spectrum_n_freqs=cross_cfg.get('n_freqs', 0),
         ).to(device)
 
     logging.info(f"  Encoder created (projection={projection_type}, n_bins={config['encoding']['n_bins']}, "
@@ -750,7 +832,10 @@ def main():
     graph_config = config['keyframe'].get('graph', {})
     similarity_threshold = graph_config.get('similarity_threshold', 0.993)
     similarity_max_k = graph_config.get('similarity_max_k', 10)
+    similarity_min_k = graph_config.get('similarity_min_k', 0)
     similarity_exclude_temporal = graph_config.get('similarity_exclude_temporal', True)
+    temporal_edge_mode = graph_config.get('temporal_edge_mode', 'bidirectional')
+    temporal_direction_mode = graph_config.get('temporal_direction_mode', 'none')
 
     # Adaptive prior signal and multi-scale consistency config
     prior_signal = graph_config.get('prior_signal', 'density')
@@ -856,6 +941,7 @@ def main():
                 fit_descriptors = train_descriptors
             similarity_dist = SimilarityDistribution(metric=similarity_metric).fit(
                 fit_descriptors, train_poses,
+                sequence_ids=train_sequence_ids,
                 pos_dist=triplet_cfg.get('positive_distance_max', 5.0),
                 neg_dist=triplet_cfg.get('negative_distance_min', 10.0),
                 min_temporal_gap=triplet_cfg.get('min_temporal_distance', 30),
@@ -906,6 +992,7 @@ def main():
             descriptors=initial_descriptors,
             similarity_threshold=similarity_threshold,
             similarity_max_k=similarity_max_k,
+            similarity_min_k=similarity_min_k,
             similarity_exclude_temporal=similarity_exclude_temporal,
             similarity_dist=similarity_dist,
             spectral_entropies=train_entropies,
@@ -914,6 +1001,9 @@ def main():
             multiscale_min_consistency=multiscale_min_consistency,
             similarity_metric=similarity_metric,
             standardization_stats=standardization_stats,
+            sequence_ids=train_sequence_ids,
+            temporal_edge_mode=temporal_edge_mode,
+            temporal_direction_mode=temporal_direction_mode,
             **bayesian_config,
         )
     # Attach ground-truth pose-based similarity edges (train only).
@@ -968,6 +1058,7 @@ def main():
                 descriptors=val_initial_descriptors,
                 similarity_threshold=similarity_threshold,
                 similarity_max_k=similarity_max_k,
+                similarity_min_k=similarity_min_k,
                 similarity_exclude_temporal=similarity_exclude_temporal,
                 similarity_dist=similarity_dist,
                 spectral_entropies=val_entropies,
@@ -976,6 +1067,8 @@ def main():
                 multiscale_min_consistency=multiscale_min_consistency,
                 similarity_metric=similarity_metric,
                 standardization_stats=standardization_stats,
+                temporal_edge_mode=temporal_edge_mode,
+                temporal_direction_mode=temporal_direction_mode,
                 **bayesian_config,
             )
             # Attach pose-GT similarity edges to val graph for upper-bound
@@ -1042,6 +1135,7 @@ def main():
             norm_type=config['gnn'].get('norm_type', 'batch_norm'),
             use_residual_gate=config['gnn'].get('use_residual_gate', False),
             gate_hidden_dim=config['gnn'].get('gate_hidden_dim', 64),
+            gate_initial_alpha=config['gnn'].get('gate_initial_alpha', 0.5),
             use_edge_confidence_gate=config['gnn'].get('use_edge_confidence_gate', False),
             edge_gate_hidden_dim=config['gnn'].get('edge_gate_hidden_dim', 16),
         ).to(device)
@@ -1059,6 +1153,39 @@ def main():
                  f"{config['gnn'].get('n_heads', 4)} heads")
     logging.info(f"  Output: cat(raw_{effective_input_dim}, context_{config['gnn']['context_dim']}) = "
                  f"{effective_input_dim + config['gnn']['context_dim']}D")
+
+    # Optional fine-tune initialization. This intentionally loads model weights
+    # only, not optimizer/epoch state, so new graph policies can start from the
+    # paper checkpoint without inheriting stale optimizer moments.
+    resume_checkpoint = args.resume_checkpoint or config.get('training', {}).get('resume_from_checkpoint')
+    if resume_checkpoint and not args.validate_only:
+        ckpt_path = Path(resume_checkpoint)
+        if not ckpt_path.exists():
+            logging.warning(f"  Resume checkpoint not found, training from scratch: {ckpt_path}")
+        else:
+            ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+            source_state = ckpt.get('model_state_dict', ckpt)
+            target_state = gnn.state_dict()
+            compatible = {}
+            skipped = []
+            for key, value in source_state.items():
+                clean_key = key[len('module.'):] if key.startswith('module.') else key
+                if clean_key in target_state and target_state[clean_key].shape == value.shape:
+                    compatible[clean_key] = value
+                else:
+                    skipped.append(clean_key)
+            missing, unexpected = gnn.load_state_dict(compatible, strict=False)
+            logging.info(
+                f"  Fine-tune init: loaded {len(compatible)}/{len(target_state)} tensors "
+                f"from {ckpt_path} (epoch={ckpt.get('epoch', '?')}, "
+                f"best_val_metric={ckpt.get('best_val_metric', '?')})"
+            )
+            if skipped:
+                logging.warning(f"  Skipped incompatible checkpoint tensors: {skipped[:20]}")
+            if missing:
+                logging.warning(f"  Missing after fine-tune init: {missing[:20]}")
+            if unexpected:
+                logging.warning(f"  Unexpected after fine-tune init: {unexpected[:20]}")
 
     # Create trainer
     from gnn.trainer import GNNTrainer
@@ -1106,6 +1233,9 @@ def main():
                      f"best R@1={ckpt.get('best_val_metric', '?')})")
         logging.info(f"  Graph params: confidence_level={bayesian_config.get('confidence_level', 'N/A')}, "
                      f"similarity_max_k={similarity_max_k}, "
+                     f"similarity_min_k={similarity_min_k}, "
+                     f"temporal_edge_mode={temporal_edge_mode}, "
+                     f"temporal_direction_mode={temporal_direction_mode}, "
                      f"multiscale_min_consistency={multiscale_min_consistency}")
 
         gc.collect()
@@ -1163,6 +1293,7 @@ def main():
         refine_edge_kwargs = {
             'similarity_threshold': similarity_threshold,
             'similarity_max_k': similarity_max_k,
+            'similarity_min_k': similarity_min_k,
             'similarity_exclude_temporal': similarity_exclude_temporal,
             'similarity_metric': similarity_metric,
             'prior_signal': prior_signal,
@@ -1184,9 +1315,11 @@ def main():
                     triplet_miner=triplet_miner,
                     mine_every_n_epochs=training_config.get('mine_every_n_epochs', 1),
                     validate_every_n_epochs=training_config.get('validate_every_n_epochs', 1),
+                    n_triplets_per_anchor=triplet_config.get('n_triplets_per_anchor', 1),
                     two_pass_cfg=two_pass_cfg if two_pass_enabled else None,
                     refine_fit_kwargs=refine_fit_kwargs,
                     refine_edge_kwargs=refine_edge_kwargs,
+                    temperature_schedule=training_config.get('temperature_schedule'),
                 )
         except Exception as e:
             logging.error(f"Training failed: {e}", exc_info=True)

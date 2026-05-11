@@ -206,10 +206,13 @@ def main():
             descriptors=descs,
             similarity_threshold=graph_config.get('similarity_threshold', 0.993),
             similarity_max_k=graph_config.get('similarity_max_k', 10),
+            similarity_min_k=graph_config.get('similarity_min_k', 0),
             similarity_exclude_temporal=graph_config.get('similarity_exclude_temporal', True),
             similarity_dist=similarity_dist,
             similarity_metric=similarity_metric,
             standardization_stats=standardization_stats,
+            temporal_edge_mode=graph_config.get('temporal_edge_mode', 'bidirectional'),
+            temporal_direction_mode=graph_config.get('temporal_direction_mode', 'none'),
             **bayesian_config,
         )
         val_graphs[name] = graph
