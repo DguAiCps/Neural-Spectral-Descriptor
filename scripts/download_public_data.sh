@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DATA_ROOT="${1:-/rise/RISE1/workspace/data}"
+DATA_ROOT="${1:-/workspace/data}"
 LOG_DIR="${DATA_ROOT}/download_logs"
 
 mkdir -p "${DATA_ROOT}/kitti" "${DATA_ROOT}/nclt" "${LOG_DIR}"

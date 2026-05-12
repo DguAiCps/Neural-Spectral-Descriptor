@@ -29,8 +29,8 @@ DEVICE="${DEVICE:-cuda}"
 RUN_TESTS="${RUN_TESTS:-0}"
 RUN_NCLT="${RUN_NCLT:-1}"
 
-ROOT_KITTI="${ROOT_KITTI:-/rise/RISE1/workspace/data/kitti/dataset}"
-ROOT_NCLT="${ROOT_NCLT:-/rise/RISE1/workspace/data/nclt}"
+ROOT_KITTI="${ROOT_KITTI:-/workspace/data/kitti/dataset}"
+ROOT_NCLT="${ROOT_NCLT:-/workspace/data/nclt}"
 
 CONFIG="${CONFIG:-configs/training_multi_dataset_sensor_gat_absdiff.yaml}"
 ENCODER_PRESET="${ENCODER_PRESET:-no_interdiff}"

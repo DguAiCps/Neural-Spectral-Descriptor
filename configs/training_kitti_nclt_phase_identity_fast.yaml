@@ -9,20 +9,20 @@ data:
   datasets:
     train:
       - type: kitti
-        root: /rise/RISE1/workspace/data/kitti/dataset
+        root: /workspace/data/kitti/dataset
         sequences: ['01', '02', '06', '07']
         weight: 1.0
       - type: nclt
-        root: /rise/RISE1/workspace/data/nclt
+        root: /workspace/data/nclt
         sequences: ['2012-05-11']
         weight: 1.0
     val:
       - type: kitti
-        root: /rise/RISE1/workspace/data/kitti/dataset
+        root: /workspace/data/kitti/dataset
         sequences: ['00', '05', '08']
         weight: 1.0
       - type: nclt
-        root: /rise/RISE1/workspace/data/nclt
+        root: /workspace/data/nclt
         sequences: ['2012-01-08', '2013-01-10']
         weight: 1.0
     test: []

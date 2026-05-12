@@ -12,41 +12,41 @@ data:
   datasets:
     train:
       - type: helipr
-        root: /rise/RISE1/workspace/data/helipr
+        root: /workspace/data/helipr
         sequences: ['Town02', 'Roundabout01', 'Bridge01', 'KAIST04', 'DCC04', 'Riverside04']
         weight: 1.0
       - type: kitti
-        root: /rise/RISE1/workspace/data/kitti/dataset
+        root: /workspace/data/kitti/dataset
         sequences: ['01', '02', '06', '07']
         weight: 1.0
       - type: nclt
-        root: /rise/RISE1/workspace/data/nclt
+        root: /workspace/data/nclt
         sequences: ['2012-05-11', '2012-08-04', '2012-11-04', '2012-11-16', '2013-02-23']
         weight: 1.0
       - type: mulran
-        root: /rise/RISE1/workspace/data/mulran
+        root: /workspace/data/mulran
         sequences: ['DCC01', 'DCC02', 'KAIST01', 'KAIST02', 'Riverside01', 'Riverside02', 'Sejong01', 'Sejong02', 'Sejong03']
         weight: 1.0
     val:
       - type: kitti
-        root: /rise/RISE1/workspace/data/kitti/dataset
+        root: /workspace/data/kitti/dataset
         sequences: ['00', '05', '08']
         weight: 1.0
       - type: nclt
-        root: /rise/RISE1/workspace/data/nclt
+        root: /workspace/data/nclt
         sequences: ['2012-01-08', '2013-01-10']
         weight: 1.0
       - type: helipr
-        root: /rise/RISE1/workspace/data/helipr
+        root: /workspace/data/helipr
         sequences: ['Town01']
         weight: 1.0
       - type: mulran
-        root: /rise/RISE1/workspace/data/mulran
+        root: /workspace/data/mulran
         sequences: ['DCC03', 'KAIST03', 'Riverside03']
         weight: 1.0
     test:
       - type: kitti
-        root: /rise/RISE1/workspace/data/kitti/dataset
+        root: /workspace/data/kitti/dataset
         sequences: ['09', '10']
         weight: 1.0
 
