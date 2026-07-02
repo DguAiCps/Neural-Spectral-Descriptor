@@ -26,6 +26,20 @@ from keyframe.selector import Keyframe
 logger = logging.getLogger(__name__)
 
 
+def _expand_nodewise_k(value, n_nodes: int, name: str) -> Tuple[np.ndarray, int, bool]:
+    """Expand scalar or per-node k config into a length-N integer array."""
+    arr = np.asarray(value)
+    if arr.ndim == 0:
+        scalar = max(0, int(arr))
+        return np.full(n_nodes, scalar, dtype=np.int64), scalar, True
+
+    arr = arr.reshape(-1)
+    if arr.shape[0] != n_nodes:
+        raise ValueError(f"{name} must be scalar or length {n_nodes}, got {arr.shape[0]}")
+    arr = np.maximum(arr.astype(np.int64), 0)
+    return arr, int(arr.max() if arr.size else 0), False
+
+
 def _compute_multiscale_consistency(
     descs_normed: np.ndarray,
     i: int,
@@ -68,8 +82,10 @@ def _compute_multiscale_consistency(
 def _build_similarity_edges(
     descriptors: np.ndarray,
     temporal_neighbor_sets: dict,
+    sequence_ids: np.ndarray = None,
     similarity_threshold: float = 0.993,
     similarity_max_k: int = 10,
+    similarity_min_k: int = 0,
     similarity_exclude_temporal: bool = True,
     similarity_dist=None,
     confidence_level: float = 0.95,
@@ -97,8 +113,14 @@ def _build_similarity_edges(
     Args:
         descriptors: (n_nodes, D) descriptor matrix
         temporal_neighbor_sets: {node_idx: set of temporal neighbor indices}
+        sequence_ids: Optional (n_nodes,) sequence ID per descriptor. When provided,
+            similarity candidates are restricted to the same sequence because poses
+            and revisit labels are sequence-local.
         similarity_threshold: Minimum cosine similarity (fallback mode)
-        similarity_max_k: Maximum neighbors per node (safety cap)
+        similarity_max_k: Maximum neighbors per node (scalar or length-N array).
+        similarity_min_k: Minimum neighbors per node to keep via relaxed top-k
+            fallback (scalar or length-N array). Default 0 preserves the
+            original strict thresholding.
         similarity_exclude_temporal: If True, exclude temporal neighbors
         similarity_dist: SimilarityDistribution instance (enables Bayesian mode)
         confidence_level: Minimum posterior P(same|obs) for edge (Bayesian mode)
@@ -120,6 +142,14 @@ def _build_similarity_edges(
 
     n_nodes, d = descriptors.shape
     descs_f32 = descriptors.astype(np.float32).copy()
+    max_k_by_node, max_k_global, max_k_is_scalar = _expand_nodewise_k(
+        similarity_max_k, n_nodes, "similarity_max_k"
+    )
+    min_k_by_node, min_k_global, min_k_is_scalar = _expand_nodewise_k(
+        similarity_min_k, n_nodes, "similarity_min_k"
+    )
+    min_k_by_node = np.minimum(min_k_by_node, max_k_by_node)
+    min_k_global = int(min_k_by_node.max() if min_k_by_node.size else 0)
 
     # L2 normalize for cosine sim (always needed for edge_attr)
     norms = np.linalg.norm(descs_f32, axis=1, keepdims=True)
@@ -128,7 +158,9 @@ def _build_similarity_edges(
 
     # Over-fetch to compensate for temporal exclusion + self
     max_temporal = max((len(s) for s in temporal_neighbor_sets.values()), default=0)
-    fetch_k_base = similarity_max_k + max_temporal + 1
+    fetch_k_base = max_k_global + max_temporal + 1
+    if min_k_global > 0:
+        fetch_k_base = max(fetch_k_base, min_k_global * 4 + max_temporal + 1)
 
     # Bayesian mode needs more candidates (threshold is adaptive)
     bayesian = similarity_dist is not None and similarity_dist.fitted
@@ -211,12 +243,22 @@ def _build_similarity_edges(
         if use_l2:
             logger.info(f"  ceiling_l2={threshold:.4f}")
         else:
-            logger.info(f"  floor_sim={threshold:.6f}")
+            threshold = max(threshold, similarity_threshold)
+            logger.info(
+                f"  floor_sim={threshold:.6f} "
+                f"(posterior floor plus cosine floor {similarity_threshold:.6f})"
+            )
 
         edges = []
         n_multiscale_filtered = 0
+        n_relaxed_added = 0
         for i in range(n_nodes):
-            count = 0
+            max_k_i = int(max_k_by_node[i])
+            min_k_i = int(min_k_by_node[i])
+            if max_k_i <= 0:
+                continue
+            accepted = []
+            relaxed = []
             temporal_set = temporal_neighbor_sets.get(i, set())
             prior_i = float(adaptive_priors[i])
 
@@ -224,23 +266,25 @@ def _build_similarity_edges(
                 j = int(indices[i, j_pos])
                 if j == i:
                     continue
+                if sequence_ids is not None and sequence_ids[j] != sequence_ids[i]:
+                    continue
                 if similarity_exclude_temporal and j in temporal_set:
                     continue
 
                 obs = float(faiss_dists[i, j_pos])
+                below_strict_floor = False
 
                 if use_l2:
                     # L2: ascending order, break when above ceiling
                     if obs > threshold:
-                        break
+                        below_strict_floor = True
                 else:
                     # Cosine: descending order, break when below floor
                     if obs < threshold:
-                        break
+                        below_strict_floor = True
 
                 post = float(similarity_dist.posterior(obs, prior=prior_i))
-                if post < confidence_level:
-                    continue
+                posterior_ok = post >= confidence_level
 
                 # Multi-scale consistency check
                 if use_multiscale:
@@ -254,41 +298,105 @@ def _build_similarity_edges(
                 # Edge features always from original descriptor space
                 cos_sim = float(np.dot(descs_normed[i], descs_normed[j]))
                 l2 = float(np.linalg.norm(descs_f32[i] - descs_f32[j]))
-                edges.append((i, j, cos_sim, l2, post))
+                candidate = (i, j, cos_sim, l2, post)
 
-                count += 1
-                if count >= similarity_max_k:
+                if not below_strict_floor and posterior_ok:
+                    accepted.append(candidate)
+                    if len(accepted) >= max_k_i:
+                        break
+                elif min_k_i > 0 and posterior_ok:
+                    relaxed.append(candidate)
+
+                if (
+                    min_k_i > 0
+                    and len(accepted) < min_k_i
+                    and len(accepted) + len(relaxed) >= max_k_i
+                ):
                     break
+
+                if below_strict_floor and min_k_i == 0:
+                    break
+
+            if len(accepted) < min_k_i and relaxed:
+                need = min(min_k_i - len(accepted), max_k_i - len(accepted))
+                accepted.extend(relaxed[:need])
+                n_relaxed_added += need
+
+            edges.extend(accepted[:max_k_i])
 
         if use_multiscale and n_multiscale_filtered > 0:
             logger.info(
                 f"  Multi-scale consistency filtered {n_multiscale_filtered} candidate edges "
                 f"(min_consistency={multiscale_min_consistency:.2f})"
             )
+        if n_relaxed_added > 0:
+            if max_k_is_scalar and min_k_is_scalar:
+                k_msg = f"min_k={min_k_global}, max_k={max_k_global}"
+            else:
+                k_msg = (
+                    f"min_k_range=[{min_k_by_node.min()}, {min_k_by_node.max()}], "
+                    f"max_k_range=[{max_k_by_node.min()}, {max_k_by_node.max()}]"
+                )
+            logger.info(
+                f"  Relaxed similarity min-k added {n_relaxed_added} edges "
+                f"({k_msg})"
+            )
 
     else:
         # === Fallback: fixed cosine threshold (cosine metric only) ===
         edges = []
+        n_relaxed_added = 0
         for i in range(n_nodes):
-            count = 0
+            max_k_i = int(max_k_by_node[i])
+            min_k_i = int(min_k_by_node[i])
+            if max_k_i <= 0:
+                continue
+            accepted = []
+            relaxed = []
             temporal_set = temporal_neighbor_sets.get(i, set())
             for j_pos in range(fetch_k):
                 j = int(indices[i, j_pos])
                 if j == i:
+                    continue
+                if sequence_ids is not None and sequence_ids[j] != sequence_ids[i]:
                     continue
                 if similarity_exclude_temporal and j in temporal_set:
                     continue
 
                 cos_sim = float(faiss_dists[i, j_pos])
                 if cos_sim < similarity_threshold:
-                    break
+                    if min_k_i == 0:
+                        break
+                    l2 = float(np.linalg.norm(descs_f32[i] - descs_f32[j]))
+                    relaxed.append((i, j, cos_sim, l2, 1.0))
+                    if len(accepted) + len(relaxed) >= max_k_i:
+                        break
+                    continue
 
                 l2 = float(np.linalg.norm(descs_f32[i] - descs_f32[j]))
-                edges.append((i, j, cos_sim, l2, 1.0))
+                accepted.append((i, j, cos_sim, l2, 1.0))
 
-                count += 1
-                if count >= similarity_max_k:
+                if len(accepted) >= max_k_i:
                     break
+
+            if len(accepted) < min_k_i and relaxed:
+                need = min(min_k_i - len(accepted), max_k_i - len(accepted))
+                accepted.extend(relaxed[:need])
+                n_relaxed_added += need
+            edges.extend(accepted[:max_k_i])
+
+        if n_relaxed_added > 0:
+            if max_k_is_scalar and min_k_is_scalar:
+                k_msg = f"min_k={min_k_global}, max_k={max_k_global}"
+            else:
+                k_msg = (
+                    f"min_k_range=[{min_k_by_node.min()}, {min_k_by_node.max()}], "
+                    f"max_k_range=[{max_k_by_node.min()}, {max_k_by_node.max()}]"
+                )
+            logger.info(
+                f"  Relaxed similarity min-k added {n_relaxed_added} edges "
+                f"({k_msg})"
+            )
 
     return edges
 
@@ -389,6 +497,7 @@ def attach_pose_gt_similarity_edges(
     for k in range(temporal_ei.shape[1]):
         src, dst = int(temporal_ei[0, k]), int(temporal_ei[1, k])
         temporal_neighbor_sets[src].add(dst)
+        temporal_neighbor_sets[dst].add(src)
 
     # Build GT pose edges
     sim_edges = build_similarity_edges_from_poses(
@@ -429,11 +538,116 @@ def attach_pose_gt_similarity_edges(
     return graph, len(sim_edges)
 
 
+def attach_phase_similarity_edges(
+    graph: Data,
+    phase_features: np.ndarray,
+    descriptors: np.ndarray = None,
+    poses: np.ndarray = None,
+    sequence_ids: np.ndarray = None,
+    max_k: int = 5,
+    min_similarity: float = 0.0,
+    temporal_exclude: int = 30,
+) -> Tuple[Data, int]:
+    """Append phase-neighbor candidate edges to an existing graph.
+
+    Phase edges expand the candidate graph using yaw-invariant phase evidence.
+    They keep the same edge schema as descriptor-similarity edges; the phase
+    signal itself is consumed by PhaseEdgeBias through graph.x_phase.
+    """
+    if max_k <= 0 or phase_features is None or len(phase_features) == 0:
+        return graph, 0
+
+    device = graph.edge_index.device
+    phase = np.asarray(phase_features, dtype=np.float32)
+    n_nodes = phase.shape[0]
+    phase = np.sign(phase) * np.log1p(np.abs(phase))
+    phase = phase - phase.mean(axis=0, keepdims=True)
+    phase = phase / np.maximum(phase.std(axis=0, keepdims=True), 1e-6)
+    phase = phase / np.maximum(np.linalg.norm(phase, axis=1, keepdims=True), 1e-8)
+    phase = phase.astype(np.float32)
+
+    desc_norm = None
+    if descriptors is not None:
+        desc = np.asarray(descriptors, dtype=np.float32)
+        desc_norm = desc / np.maximum(np.linalg.norm(desc, axis=1, keepdims=True), 1e-8)
+
+    existing = set(map(tuple, graph.edge_index.detach().cpu().numpy().T.tolist()))
+    fetch_k = min(n_nodes, max(max_k * 8 + temporal_exclude + 1, max_k + 1))
+    try:
+        import faiss
+        index = faiss.IndexFlatIP(phase.shape[1])
+        index.add(phase)
+        sims, indices = index.search(phase, fetch_k)
+    except Exception:
+        sims = phase @ phase.T
+        indices = np.argsort(-sims, axis=1)[:, :fetch_k]
+        sims = np.take_along_axis(sims, indices, axis=1)
+
+    new_edges = []
+    new_attrs = []
+    new_labels = []
+    positions = poses[:, :3, 3] if poses is not None else None
+
+    for i in range(n_nodes):
+        added = 0
+        for sim, j in zip(sims[i], indices[i]):
+            j = int(j)
+            if i == j:
+                continue
+            same_sequence = sequence_ids is None or sequence_ids[i] == sequence_ids[j]
+            if not same_sequence:
+                continue
+            if temporal_exclude > 0 and same_sequence:
+                if abs(i - j) <= temporal_exclude:
+                    continue
+            if (i, j) in existing:
+                continue
+            phase_sim = float(sim)
+            if phase_sim < min_similarity:
+                continue
+
+            if desc_norm is not None:
+                raw_cos = float(np.dot(desc_norm[i], desc_norm[j]))
+                raw_l2 = float(np.linalg.norm(desc_norm[i] - desc_norm[j]))
+            else:
+                raw_cos = phase_sim
+                raw_l2 = float(np.sqrt(max(0.0, 2.0 - 2.0 * phase_sim)))
+            posterior = float(np.clip((phase_sim + 1.0) * 0.5, 0.0, 1.0))
+            new_edges.append([i, j])
+            new_attrs.append([0.0, 0.0, raw_cos, np.log1p(raw_l2) / 5.0, posterior])
+            existing.add((i, j))
+
+            if positions is not None:
+                dist = np.linalg.norm(positions[i] - positions[j])
+                new_labels.append(1.0 if dist < 5.0 else 0.0)
+            added += 1
+            if added >= max_k:
+                break
+
+    if not new_edges:
+        return graph, 0
+
+    edge_index_new = torch.tensor(new_edges, dtype=torch.long, device=device).t().contiguous()
+    edge_attr_new = torch.tensor(new_attrs, dtype=torch.float32, device=device)
+    edge_type_new = torch.ones(len(new_edges), dtype=torch.long, device=device)
+    graph.edge_index = torch.cat([graph.edge_index, edge_index_new], dim=1)
+    graph.edge_attr = torch.cat([graph.edge_attr, edge_attr_new], dim=0)
+    graph.edge_type = torch.cat([graph.edge_type, edge_type_new], dim=0)
+    if hasattr(graph, 'edge_pose_label') and graph.edge_pose_label is not None:
+        if new_labels:
+            labels_new = torch.tensor(new_labels, dtype=torch.float32, device=device)
+        else:
+            labels_new = torch.zeros(len(new_edges), dtype=torch.float32, device=device)
+        graph.edge_pose_label = torch.cat([graph.edge_pose_label, labels_new], dim=0)
+    return graph, len(new_edges)
+
+
 def rebuild_similarity_edges(
     graph: Data,
     new_descriptors: np.ndarray,
     similarity_threshold: float = 0.993,
     similarity_max_k: int = 10,
+    similarity_min_k: int = 0,
     similarity_exclude_temporal: bool = True,
     similarity_dist=None,
     confidence_level: float = 0.95,
@@ -446,6 +660,7 @@ def rebuild_similarity_edges(
     multiscale_min_consistency: float = 0.0,
     similarity_metric: str = 'l2',
     standardization_stats=None,
+    sequence_ids: np.ndarray = None,
 ) -> Tuple[Data, int]:
     """Replace similarity edges (edge_type=1) on a graph with newly computed ones.
 
@@ -466,6 +681,8 @@ def rebuild_similarity_edges(
     """
     device = graph.edge_index.device
     n_nodes = graph.num_nodes
+    if sequence_ids is None and hasattr(graph, 'sequence_ids'):
+        sequence_ids = graph.sequence_ids.detach().cpu().numpy()
 
     # Reconstruct temporal_neighbor_sets from preserved edges (type 0)
     temporal_mask = (graph.edge_type == 0).cpu().numpy()
@@ -478,12 +695,15 @@ def rebuild_similarity_edges(
     for k in range(temporal_ei.shape[1]):
         src, dst = int(temporal_ei[0, k]), int(temporal_ei[1, k])
         temporal_neighbor_sets[src].add(dst)
+        temporal_neighbor_sets[dst].add(src)
 
     # Build new similarity edges via existing helper
     sim_edges = _build_similarity_edges(
         new_descriptors, temporal_neighbor_sets,
+        sequence_ids=sequence_ids,
         similarity_threshold=similarity_threshold,
         similarity_max_k=similarity_max_k,
+        similarity_min_k=similarity_min_k,
         similarity_exclude_temporal=similarity_exclude_temporal,
         similarity_dist=similarity_dist,
         confidence_level=confidence_level,
@@ -990,6 +1210,7 @@ def build_graph_from_keyframes_batch(
     descriptors: np.ndarray = None,
     similarity_threshold: float = 0.993,
     similarity_max_k: int = 10,
+    similarity_min_k: int = 0,
     similarity_exclude_temporal: bool = True,
     similarity_dist=None,
     confidence_level: float = 0.95,
@@ -1002,6 +1223,9 @@ def build_graph_from_keyframes_batch(
     multiscale_min_consistency: float = 0.0,
     similarity_metric: str = 'cosine',
     standardization_stats=None,
+    sequence_ids: np.ndarray = None,
+    temporal_edge_mode: str = 'bidirectional',
+    temporal_direction_mode: str = 'none',
 ) -> Data:
     """
     O(n) batch graph construction with temporal + similarity edges.
@@ -1018,7 +1242,9 @@ def build_graph_from_keyframes_batch(
         loop_closures: Optional list of (query_idx, match_idx) verified loop closure pairs
         descriptors: (n_keyframes, D) d_local descriptors for similarity edges
         similarity_threshold: Minimum cosine similarity (fallback mode)
-        similarity_max_k: Maximum neighbors per node (safety cap)
+        similarity_max_k: Maximum neighbors per node (scalar or length-N array)
+        similarity_min_k: Minimum neighbors per node via relaxed top-k fallback
+            (scalar or length-N array; 0 disables; default preserves existing behavior)
         similarity_exclude_temporal: Exclude temporal neighbors from similarity results
         similarity_dist: SimilarityDistribution instance (enables Bayesian mode)
         confidence_level: Minimum posterior for edge (Bayesian mode)
@@ -1029,6 +1255,14 @@ def build_graph_from_keyframes_batch(
         prior_signal: 'density' or 'entropy' — which signal drives the adaptive prior
         channel_splits: List of (start, end) tuples for multi-scale consistency filtering
         multiscale_min_consistency: Minimum consistency score to accept a similarity edge (0=disabled)
+        sequence_ids: Optional (n_keyframes,) sequence ID per keyframe. When provided,
+            temporal and similarity edges never cross sequence boundaries.
+        temporal_edge_mode: 'bidirectional' (legacy), 'past_to_current', or
+            'future_to_current'. Causal modes are used for test-time forward/reverse
+            graph ablations.
+        temporal_direction_mode: 'none' or 'signed_distance'. The latter keeps
+            edge_attr 5D/checkpoint-compatible but signs temporal dist by edge
+            direction (dst index - src index).
 
     Returns:
         PyG Data object with:
@@ -1045,6 +1279,19 @@ def build_graph_from_keyframes_batch(
     if n_nodes == 0:
         return None
 
+    valid_temporal_modes = {'bidirectional', 'past_to_current', 'future_to_current'}
+    if temporal_edge_mode not in valid_temporal_modes:
+        raise ValueError(
+            f"Unknown temporal_edge_mode={temporal_edge_mode!r}; "
+            f"expected one of {sorted(valid_temporal_modes)}"
+        )
+    valid_direction_modes = {'none', 'signed_distance'}
+    if temporal_direction_mode not in valid_direction_modes:
+        raise ValueError(
+            f"Unknown temporal_direction_mode={temporal_direction_mode!r}; "
+            f"expected one of {sorted(valid_direction_modes)}"
+        )
+
     # 1. Extract all features at once - O(n)
     features = torch.stack([
         torch.from_numpy(kf.descriptor).float()
@@ -1060,6 +1307,30 @@ def build_graph_from_keyframes_batch(
     M = temporal_neighbors
     half_window = M // 2
 
+    def _append_temporal_edge(src: int, dst: int) -> None:
+        edges.append([src, dst])
+        edge_types.append(0)  # temporal
+
+        # Compute pose-based features
+        if poses is not None:
+            pos_src = poses[src, :3, 3]
+            pos_dst = poses[dst, :3, 3]
+            dist = np.linalg.norm(pos_src - pos_dst)
+            norm_dist = np.log1p(dist) / 5.0
+            if temporal_direction_mode == 'signed_distance':
+                norm_dist *= float(np.sign(dst - src))
+
+            R_src = poses[src, :3, :3]
+            R_dst = poses[dst, :3, :3]
+            R_rel = R_dst @ R_src.T
+            trace_val = np.clip(np.trace(R_rel), -1.0, 3.0)
+            angle_rad = np.arccos(np.clip((trace_val - 1.0) / 2.0, -1.0, 1.0))
+            norm_rot = angle_rad / np.pi
+
+            edge_attrs.append([norm_dist, norm_rot, 0.0, 0.0, 1.0])
+        else:
+            edge_attrs.append([0.0, 0.0, 0.0, 0.0, 1.0])
+
     for i in range(n_nodes):
         for offset in range(-half_window, half_window + 1):
             if offset == 0:
@@ -1068,62 +1339,42 @@ def build_graph_from_keyframes_batch(
             neighbor_idx = i + offset
 
             if 0 <= neighbor_idx < n_nodes:
-                edges.append([i, neighbor_idx])
+                if sequence_ids is not None and sequence_ids[neighbor_idx] != sequence_ids[i]:
+                    continue
+                # Similarity exclusion remains symmetric even when message
+                # passing is causal; immediate temporal neighbors should not
+                # re-enter as descriptor-similarity edges.
                 temporal_neighbor_sets[i].add(neighbor_idx)
-                edge_types.append(0)  # temporal
+                temporal_neighbor_sets[neighbor_idx].add(i)
 
-                # Compute pose-based features
-                if poses is not None:
-                    pos_i = poses[i, :3, 3]
-                    pos_j = poses[neighbor_idx, :3, 3]
-                    dist = np.linalg.norm(pos_i - pos_j)
-                    norm_dist = np.log1p(dist) / 5.0
-
-                    R_i = poses[i, :3, :3]
-                    R_j = poses[neighbor_idx, :3, :3]
-                    R_rel = R_j @ R_i.T
-                    trace_val = np.clip(np.trace(R_rel), -1.0, 3.0)
-                    angle_rad = np.arccos(np.clip((trace_val - 1.0) / 2.0, -1.0, 1.0))
-                    norm_rot = angle_rad / np.pi
-
-                    edge_attrs.append([norm_dist, norm_rot, 0.0, 0.0, 1.0])
-                else:
-                    edge_attrs.append([0.0, 0.0, 0.0, 0.0, 1.0])
+                if temporal_edge_mode == 'bidirectional':
+                    _append_temporal_edge(i, neighbor_idx)
+                elif temporal_edge_mode == 'past_to_current' and neighbor_idx < i:
+                    _append_temporal_edge(neighbor_idx, i)
+                elif temporal_edge_mode == 'future_to_current' and neighbor_idx > i:
+                    _append_temporal_edge(neighbor_idx, i)
 
     # 2.5. Add verified loop closure edges (bidirectional, type 0)
     if loop_closures is not None and len(loop_closures) > 0:
         for query_idx, match_idx in loop_closures:
             if 0 <= query_idx < n_nodes and 0 <= match_idx < n_nodes:
                 for src, dst in [(query_idx, match_idx), (match_idx, query_idx)]:
-                    edges.append([src, dst])
                     temporal_neighbor_sets[src].add(dst)
-                    edge_types.append(0)  # temporal
-
-                    if poses is not None:
-                        pos_i = poses[query_idx, :3, 3]
-                        pos_j = poses[match_idx, :3, 3]
-                        dist = np.linalg.norm(pos_i - pos_j)
-                        norm_dist = np.log1p(dist) / 5.0
-
-                        R_i = poses[query_idx, :3, :3]
-                        R_j = poses[match_idx, :3, :3]
-                        R_rel = R_j @ R_i.T
-                        trace_val = np.clip(np.trace(R_rel), -1.0, 3.0)
-                        angle_rad = np.arccos(np.clip((trace_val - 1.0) / 2.0, -1.0, 1.0))
-                        norm_rot = angle_rad / np.pi
-
-                        edge_attrs.append([norm_dist, norm_rot, 0.0, 0.0, 1.0])
-                    else:
-                        edge_attrs.append([0.0, 0.0, 0.0, 0.0, 1.0])
+                    temporal_neighbor_sets[dst].add(src)
+                    _append_temporal_edge(src, dst)
 
     n_temporal_edges = len(edges)
 
     # 3. Build similarity edges (Bayesian posterior or cosine threshold)
     if descriptors is not None and n_nodes > 1:
         sim_edges = _build_similarity_edges(
-            descriptors, temporal_neighbor_sets,
-            similarity_threshold, similarity_max_k,
-            similarity_exclude_temporal,
+            descriptors,
+            temporal_neighbor_sets,
+            sequence_ids=sequence_ids,
+            similarity_threshold=similarity_threshold,
+            similarity_max_k=similarity_max_k,
+            similarity_min_k=similarity_min_k,
+            similarity_exclude_temporal=similarity_exclude_temporal,
             similarity_dist=similarity_dist,
             confidence_level=confidence_level,
             density_k=density_k,
@@ -1182,5 +1433,9 @@ def build_graph_from_keyframes_batch(
     ).to(device)
     # Attach pose-GT labels separately (PyG Data supports arbitrary tensor attrs)
     graph.edge_pose_label = edge_pose_label
+    if sequence_ids is not None:
+        graph.sequence_ids = torch.from_numpy(np.asarray(sequence_ids)).long().to(device)
+    graph.temporal_edge_mode = temporal_edge_mode
+    graph.temporal_direction_mode = temporal_direction_mode
 
     return graph

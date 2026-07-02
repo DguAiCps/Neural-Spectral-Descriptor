@@ -23,6 +23,7 @@ import numpy as np
 
 from baselines import register
 from baselines.base import BaselineEncoder
+from utils.cyclic_shift_distance import cyclic_column_cosine_distance
 
 
 def build_scan_context(points, n_rings=20, n_sectors=60, max_range=80.0, z_min=-3.0):
@@ -66,46 +67,8 @@ def _ring_key(sc: np.ndarray) -> np.ndarray:
 
 
 def _distance_sc_columnwise(sc1: np.ndarray, sc2: np.ndarray) -> float:
-    """
-    Column-shift cosine distance between two SC matrices (paper Eq.7-8).
-
-    For each shift tau in [0, n_sectors), shift sc2 columns by tau, compute
-    per-column cosine distance to sc1, average over non-empty columns. Return
-    the minimum over tau.
-
-    Vectorized across all shifts via a (n_sectors, n_rings, n_sectors) tensor
-    of column-shifted copies of sc2, computed once with stride tricks.
-    """
-    n_rings, n_sectors = sc1.shape
-    eps = 1e-8
-
-    norm_q = np.linalg.norm(sc1, axis=0)  # (n_sectors,)
-    valid_q = norm_q > eps
-    if not valid_q.any():
-        return 1.0
-
-    # Build all shifted sc2 in one tensor: shifted[tau, :, s] = sc2[:, (s - tau) mod n_sec].
-    # Equivalent to stacking np.roll(sc2, tau, axis=1) for tau in 0..n-1.
-    idx = (np.arange(n_sectors)[None, :] - np.arange(n_sectors)[:, None]) % n_sectors
-    shifted = sc2[:, idx]  # (n_rings, n_sectors_tau, n_sectors_s) via fancy idx
-    # Reshape to (n_taus, n_rings, n_sectors): np advanced indexing produces
-    # (n_rings, n_taus, n_sectors) — transpose to put tau first.
-    shifted = shifted.transpose(1, 0, 2)  # (n_taus, n_rings, n_sectors)
-
-    # Per (tau, s) dot product
-    dots = (sc1[None] * shifted).sum(axis=1)  # (n_taus, n_sectors)
-    norms = np.linalg.norm(shifted, axis=1)  # (n_taus, n_sectors)
-    valid_mat = valid_q[None, :] & (norms > eps)  # (n_taus, n_sectors)
-
-    sim = dots / (norm_q[None, :] * norms + eps)
-    one_minus = 1.0 - sim
-    # Per-tau mean over valid columns. Mask invalid → 0 contribution and
-    # divide by valid count.
-    contrib = np.where(valid_mat, one_minus, 0.0)
-    counts = valid_mat.sum(axis=1).astype(np.float64)  # (n_taus,)
-    counts = np.maximum(counts, 1)
-    per_tau = contrib.sum(axis=1) / counts
-    return float(per_tau.min())
+    """SC++ column-shift distance wrapper around the shared cyclic primitive."""
+    return cyclic_column_cosine_distance(sc1, sc2)
 
 
 @register

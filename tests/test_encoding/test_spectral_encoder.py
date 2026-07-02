@@ -136,13 +136,17 @@ class TestBinning:
         desc = enc.encode_points(random_point_cloud)
         assert desc.shape == (enc.output_dim,)
 
-    def test_alpha_is_learnable(self):
-        enc = _make_encoder(learnable_alpha=True)
-        assert enc.alpha.requires_grad is True
-
-    def test_alpha_is_fixed(self):
-        enc = _make_encoder(learnable_alpha=False)
+    def test_alpha_is_fixed_for_octave_even_if_requested_learnable(self):
+        enc = _make_encoder(binning_strategy='octave', learnable_alpha=True)
         assert enc.alpha.requires_grad is False
+
+    def test_alpha_is_fixed_for_exponential_when_requested_fixed(self):
+        enc = _make_encoder(binning_strategy='exponential', learnable_alpha=False)
+        assert enc.alpha.requires_grad is False
+
+    def test_alpha_is_learnable_for_legacy_exponential(self):
+        enc = _make_encoder(binning_strategy='exponential', learnable_alpha=True)
+        assert enc.alpha.requires_grad is True
 
 
 class TestSpectralEncoderNumpy:

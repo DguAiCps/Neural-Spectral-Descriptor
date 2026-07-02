@@ -157,14 +157,14 @@ class TestSoftBinning:
         assert policy.per_ring_dim == 14
 
     def test_with_projection(self, fft_input):
-        """When output_dim doesn't match n_rings*per_ring_dim, a projection is used."""
+        """Soft binning keeps the closed-form per-ring dimensionality."""
         policy = SoftBinning(
             N_RINGS, N_FREQS, output_dim=512,
             n_soft_bins=4,
         )
         out = policy(fft_input)
-        assert out.shape == (BATCH, 512)
-        assert policy.proj is not None
+        assert out.shape == (BATCH, 1106)
+        assert policy.proj is None
 
 
 # ---------------------------------------------------------------------------

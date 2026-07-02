@@ -1,0 +1,197 @@
+# Server-available subset for the sequential sensor-GAT + physics3 run.
+#
+# The current RISE1 practice server has KITTI and only four NCLT dates:
+#   train: 2012-05-11, 2012-08-04
+#   val:   2012-01-08, 2013-01-10
+# HeLiPR and MulRan are intentionally omitted here because their data roots are
+# absent on the server. Use training_multi_dataset_sensor_gat_absdiff.yaml when
+# the full four-dataset data tree is available.
+
+data:
+  lazy_load: true
+  cache_dir: data/preprocessed_sensor_gat_absdiff
+  datasets:
+    train:
+      - type: kitti
+        root: /rise/RISE1/workspace/data/kitti/dataset
+        sequences: ['01', '02', '06', '07']
+        weight: 1.0
+      - type: nclt
+        root: /rise/RISE1/workspace/data/nclt
+        sequences: ['2012-05-11', '2012-08-04']
+        weight: 1.0
+    val:
+      - type: kitti
+        root: /rise/RISE1/workspace/data/kitti/dataset
+        sequences: ['00', '05', '08']
+        weight: 1.0
+      - type: nclt
+        root: /rise/RISE1/workspace/data/nclt
+        sequences: ['2012-01-08', '2013-01-10']
+        weight: 1.0
+    test:
+      - type: kitti
+        root: /rise/RISE1/workspace/data/kitti/dataset
+        sequences: ['09', '10']
+        weight: 1.0
+
+encoding:
+  projection_type: 'range_image'
+  n_azimuth: 360
+  max_range: 80.0
+  min_range: 1.0
+  n_elevation: 16
+  elevation_range: [-24.8, 2.0]
+  target_elevation_bins: 16
+  sensor_elevation_ranges:
+    kitti: [-24.8, 2.0]
+    nclt: [-30.67, 10.67]
+  bev:
+    z_min: -3.0
+    height_encoding: 'iris'
+    n_height_layers: 8
+    z_max: 5.0
+  binning_strategy: octave
+  n_bins: 16
+  alpha: 2.0
+  learnable_alpha: false
+  epsilon: 1.0e-08
+  bin_statistics: ['mean', 'std']
+  inter_bin_statistics: []
+  zero_center: false
+  log_magnitude: false
+  normalize_channels: false
+  spectral_policy:
+    enabled: false
+  cross_spectrum:
+    enabled: false
+    n_freqs: 0
+  quantization_bits: 16
+  descriptor_size: 288
+
+keyframe:
+  distance_threshold: 0.8
+  rotation_threshold: 20.0
+  overlap_threshold: 0.65
+  temporal_threshold: 30.0
+  voxel_size: 0.2
+  max_keyframes: 10000000
+  temporal_neighbors: 10
+  max_active_nodes: 1000
+  freeze_old_embeddings: true
+  graph:
+    similarity_metric: 'cosine'
+    edge_method: 'bayesian'
+    similarity_threshold: 0.993
+    similarity_max_k: 10
+    similarity_min_k: 0
+    similarity_exclude_temporal: true
+    temporal_edge_mode: 'bidirectional'
+    temporal_direction_mode: 'none'
+    confidence_level: 0.085
+    base_prior: 0.01
+    density_k: 50
+    density_beta: 10.0
+    n_samples: 1000000
+    prior_signal: 'density'
+    multiscale_min_consistency: 0.0
+    sensor_similarity:
+      enabled: true
+      kitti: {max_k: 10, min_k: 0}
+      nclt:  {max_k: 16, min_k: 4}
+    two_pass:
+      enabled: false
+      warmup_epochs: 10
+      refine_every: 5
+      refine_space: 'ctx'
+    use_pose_gt_edges: false
+    pose_gt_edge_max_k: 10
+
+gnn:
+  input_dim: 288
+  hidden_dim: 128
+  context_dim: 128
+  use_residual_gate: true
+  gate_hidden_dim: 64
+  gate_initial_alpha: 0.0625
+  sensor_gate:
+    enabled: true
+    num_sensors: 4
+    sensor_embed_dim: 8
+    use_beam_count: true
+    beam_embed_dim: 4
+    default_beam_count: 64.0
+  diffattn_value_source: 'abs_diff'
+  use_edge_confidence_gate: false
+  edge_gate_hidden_dim: 16
+  n_layers: 2
+  n_heads: 4
+  dropout: 0.1
+  residual: true
+  norm_type: 'batch_norm'
+  edge_encoding:
+    d_edge: 32
+    n_edge_types: 2
+    d_type_embed: 16
+    d_rot_encode: 16
+    dropout: 0.1
+  local_update_hops: 3
+  use_local_updates: true
+  use_multi_gpu: false
+  patience: 8
+
+retrieval:
+  top_k: 10
+  spatial_filter_distance: 50.0
+  context_window: 10
+  use_wasserstein: true
+  verification_method: gicp
+  icp_fitness_threshold: 0.3
+  icp_rmse_threshold: 0.5
+  icp_max_iterations: 30
+  voxel_downsample: 0.3
+
+system:
+  device: cuda
+  num_workers: 4
+  seed: 42
+  output_dir: outputs
+  log_dir: logs
+  checkpoint_dir: checkpoints
+
+logging:
+  use_wandb: false
+  wandb_project: neural-spectral-codec-server-available-sensor-gat
+  wandb_entity: null
+  log_interval: 10
+  save_interval: 1000
+
+training:
+  resume_from_checkpoint: null
+  n_epochs: 30
+  learning_rate: 3.0e-04
+  weight_decay: 1.0e-05
+  temperature: 0.1
+  log_interval: 10
+  use_amp: true
+  mine_every_n_epochs: 1
+  validate_every_n_epochs: 2
+  loss_type: 'infonce'
+  temperature_schedule:
+    enabled: true
+    start: 0.2
+    end: 0.07
+  smoothap:
+    tau: 0.05
+    n_pos: 8
+    n_neg: 256
+    batch_anchors: 32
+  edge_aux_lambda: 0.0
+  phase_edge_aux_lambda: 0.0
+  phase_alignment_aux_lambda: 0.0
+
+triplet:
+  positive_distance_max: 5.0
+  negative_distance_min: 10.0
+  min_temporal_distance: 30
+  n_triplets_per_anchor: 3

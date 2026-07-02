@@ -60,6 +60,7 @@ class SimilarityDistribution:
         self,
         descriptors: np.ndarray,
         poses: np.ndarray,
+        sequence_ids: Optional[np.ndarray] = None,
         pos_dist: float = 5.0,
         neg_dist: float = 10.0,
         min_temporal_gap: int = 30,
@@ -75,6 +76,9 @@ class SimilarityDistribution:
                 metric='cosine': L2-normalized descriptors
                 metric='l2': z-scored descriptors (via StandardizationStats)
             poses: (N, 4, 4) SE(3) poses or (N, 3) XYZ positions
+            sequence_ids: Optional (N,) sequence ID per descriptor. When provided,
+                fit only samples pairs from the same sequence because pose frames are
+                sequence-local in the multi-dataset training graph.
             pos_dist: Maximum GT distance for same-place pairs (meters)
             neg_dist: Minimum GT distance for different-place pairs (meters)
             min_temporal_gap: Minimum index gap between pairs
@@ -99,8 +103,16 @@ class SimilarityDistribution:
         idx_i = rng.randint(0, n, size=n_samples)
         idx_j = rng.randint(0, n, size=n_samples)
 
-        # Filter: different indices + temporal gap
+        # Filter: different indices + temporal gap. With multi-dataset training,
+        # poses from different trajectories do not share a coordinate frame.
         valid = (idx_i != idx_j) & (np.abs(idx_i - idx_j) >= min_temporal_gap)
+        if sequence_ids is not None:
+            sequence_ids = np.asarray(sequence_ids)
+            if len(sequence_ids) != n:
+                raise ValueError(
+                    f"sequence_ids length ({len(sequence_ids)}) != descriptors length ({n})"
+                )
+            valid &= (sequence_ids[idx_i] == sequence_ids[idx_j])
         idx_i = idx_i[valid]
         idx_j = idx_j[valid]
 
