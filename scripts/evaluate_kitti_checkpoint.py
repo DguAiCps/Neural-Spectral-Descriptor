@@ -1217,10 +1217,10 @@ def main() -> None:
                         help="Evaluate compact Fourier phase sketch aux (default: enabled for BEV-only 384D)")
     parser.add_argument("--phase-sketch-only", action="store_true",
                         help="Skip expensive full-layout rerank metrics when evaluating phase sketches")
-    parser.add_argument("--phase-range-freqs", type=int, default=0)
-    parser.add_argument("--phase-bev-freqs", type=int, default=12)
+    parser.add_argument("--phase-range-freqs", type=int, default=4)
+    parser.add_argument("--phase-bev-freqs", type=int, default=8)
     parser.add_argument("--phase-sketch-bev-weights", nargs="+", type=float, default=[0.5, 1.0, 2.0, 4.0])
-    parser.add_argument("--phase-sketch-range-weights", nargs="+", type=float, default=[0.0])
+    parser.add_argument("--phase-sketch-range-weights", nargs="+", type=float, default=[0.0, 0.125, 0.25, 0.5, 1.0])
     parser.add_argument("--phase-rerank-mode", default="sketch_fft",
                         choices=["sketch", "sketch_fft", "coherence"],
                         help="Phase-based rerank backend. "
