@@ -1,0 +1,91 @@
+{
+  "best_recall@1": 0.9284565916398714,
+  "best_metrics": {
+    "00": {
+      "R@1": 0.9810126582278481,
+      "R@5": 0.9920886075949367,
+      "R@10": 0.9936708860759493,
+      "n_queries": 632,
+      "recall@1": 0.9810126582278481,
+      "recall@5": 0.9920886075949367,
+      "recall@10": 0.9936708860759493
+    },
+    "05": {
+      "R@1": 0.9442970822281167,
+      "R@5": 0.9575596816976127,
+      "R@10": 0.9681697612732095,
+      "n_queries": 377,
+      "recall@1": 0.9442970822281167,
+      "recall@5": 0.9575596816976127,
+      "recall@10": 0.9681697612732095
+    },
+    "08": {
+      "R@1": 0.7617021276595745,
+      "R@5": 0.8425531914893617,
+      "R@10": 0.8595744680851064,
+      "n_queries": 235,
+      "recall@1": 0.7617021276595745,
+      "recall@5": 0.8425531914893617,
+      "recall@10": 0.8595744680851064
+    },
+    "_average": {
+      "recall@1": 0.9284565916398714,
+      "recall@5": 0.9533762057877814,
+      "recall@10": 0.9606109324758842,
+      "n_queries": 1244
+    }
+  },
+  "args": {
+    "config": "configs/training_kitti_phase_alignment_gat_fast.yaml",
+    "encoder_preset": "no_interdiff",
+    "checkpoint": "results/train_no_interdiff_288_gate00625_seed1/best_model.pth",
+    "use_gated_context": true,
+    "gate_initial_alpha": 0.0625,
+    "root": null,
+    "train_sequences": [
+      "01",
+      "02",
+      "06",
+      "07"
+    ],
+    "val_sequences": [
+      "00",
+      "05",
+      "08"
+    ],
+    "cache_dir": "data/preprocessed_kitti_operating_reranker",
+    "bev_cache_dir": "data/preprocessed_kitti_bev_layout_reranker",
+    "device": "cuda",
+    "layout_sectors": 60,
+    "bev_freqs": 12,
+    "bev_row_pool": 16,
+    "bev_row_pool_mode": "max",
+    "bev_min_range": 1.0,
+    "bev_max_range": 80.0,
+    "bev_z_min": -3.0,
+    "bev_z_max": 5.0,
+    "bev_height_layers": 8,
+    "bev_height_encoding": "max",
+    "temporal_edge_mode": "bidirectional",
+    "temporal_direction_mode": "none",
+    "similarity_min_k": 0,
+    "n_coarse": 400,
+    "max_candidates": 800,
+    "include_phase_candidates": false,
+    "distance_threshold": 5.0,
+    "skip_frames": 30,
+    "epochs": 10,
+    "batch_size": 8,
+    "lr": 0.0001,
+    "hidden_dim": 128,
+    "dropout": 0.1,
+    "base_phase_weight": 10.0,
+    "base_embedding_weight": 1.0,
+    "adaptive_residual_gate": false,
+    "gate_hidden_dim": 16,
+    "residual_gate_initial_alpha": 0.25,
+    "seed": 3,
+    "output": "results/kitti_learned_reranker_bev384_residual_seed3.json",
+    "checkpoint_out": "results/kitti_learned_reranker_bev384_residual_seed3.pth"
+  }
+}
