@@ -5,7 +5,7 @@ current source of truth is:
 
 1. `RELEASE_800D.md` — commands for students continuing the experiments.
 2. `EXPERIMENT_HANDOFF.md` — full experiment history and interpretation.
-3. `body_v1.3/neurips_2026.tex` — paper text and reported numbers.
+3. `docs/paper/body_aaai27/aaai2027_body.tex` — paper text and reported numbers.
 4. `RELEASE_CHECKLIST.md` — final checks before sharing the code.
 
 The old 544D/672D encoder-bandwidth baseline is still present in configs and
@@ -20,13 +20,13 @@ results for ablation context, but it is not the current paper-main path.
 = 800D stored state
 ```
 
-Reported rows:
+Reported configurations:
 
-| Row | Phase sketch | Reranker | Scope |
+| Configuration | Phase sketch | Reranker | Scope |
 | --- | --- | --- | --- |
-| Four-sensor headline | cylindrical+BEV 384D | closed-form cyclic-shift cosine | 9 validation sequences |
-| KITTI learned-residual | BEV-only max-height 384D | zero-init residual MLP | KITTI 00/05/08 |
-| Appendix ablation | physics3 384D | closed-form or residual | not paper-main |
+| Four-sensor headline (Table 1) | cylindrical+BEV 384D | closed-form cyclic-shift cosine | 9 validation sequences |
+| KITTI learned-residual (§3.4, `app:reranker_ablation`) | BEV-only max-height 384D | zero-init residual MLP | KITTI 00/05/08 |
+| Appendix ablation (`app:physics3`) | physics3 384D | closed-form or residual | not paper-main |
 
 ## Quick Start
 
