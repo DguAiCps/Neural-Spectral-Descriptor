@@ -134,6 +134,7 @@ def _make_model(config: Dict, checkpoint_path: Path, device: str) -> torch.nn.Mo
         dual_stream_config=gnn_cfg.get("dual_stream"),
         sensor_gate_config=gnn_cfg.get("sensor_gate"),
         diffattn_value_source=gnn_cfg.get("diffattn_value_source", "diff"),
+        key_remetrize_config=gnn_cfg.get("key_remetrize"),
     ).to(device)
 
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -498,6 +499,7 @@ def _recall_with_phase_sketch_fusion(
     rerank_mode: str = "sketch",
     coherence_pad_factor: int = 4,
     coherence_score_mode: str = "poc",
+    fusion_norm: str = "minmax",
 ) -> Dict[str, Dict[str, float]]:
     """Evaluate embeddings with <=512D NSD compact phase sketches.
 
@@ -509,6 +511,10 @@ def _recall_with_phase_sketch_fusion(
             shift coherence).
         coherence_pad_factor / coherence_score_mode: forwarded to
             :func:`_phase_coherence_distances` when ``rerank_mode='coherence'``.
+        fusion_norm: ``"minmax"`` (legacy per-query [0,1] rescale of every
+            channel) or ``"raw"`` (Eq.-6 semantics: fuse raw cosine /
+            cyclic-shift distances directly, so a flat sketch channel adds
+            nothing instead of being amplified to full [0,1] range).
     """
     normed = _normalize(embeddings)
     if range_freqs <= 0 and bev_freqs <= 0:
@@ -551,9 +557,14 @@ def _recall_with_phase_sketch_fusion(
             bev_distances = _distances(bev_sketch[query_idx], bev_sketch[candidates])
         else:
             bev_distances = np.zeros_like(embedding_distances, dtype=np.float32)
-        base_score = _minmax01(embedding_distances)
-        range_score = _minmax01(range_distances)
-        bev_score = _minmax01(bev_distances)
+        if fusion_norm == "raw":
+            base_score = embedding_distances
+            range_score = range_distances
+            bev_score = bev_distances
+        else:
+            base_score = _minmax01(embedding_distances)
+            range_score = _minmax01(range_distances)
+            bev_score = _minmax01(bev_distances)
 
         for bev_weight in sketch_bev_weights:
             for range_weight in sketch_range_weights:
@@ -1164,7 +1175,7 @@ def evaluate_cache(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/training_kitti_only.yaml")
+    parser.add_argument("--config", default="configs/training_multi_dataset.yaml")
     parser.add_argument(
         "--encoder-preset",
         default="full",

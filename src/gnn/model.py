@@ -554,6 +554,7 @@ class SpectralGNN(nn.Module):
         phase_coherence_config: Optional[dict] = None,
         sensor_gate_config: Optional[dict] = None,
         diffattn_value_source: str = "diff",
+        key_remetrize_config: Optional[dict] = None,
     ):
         super().__init__()
 
@@ -578,6 +579,30 @@ class SpectralGNN(nn.Module):
             self.input_dim = spectral_policy.output_dim
         else:
             self.input_dim = input_dim
+
+        # Learned invariance-preserving diagonal re-metrization of the frozen
+        # magnitude key (applied to x_raw before its L2-norm). A diagonal reweight
+        # of the already-yaw-invariant magnitude stays yaw-invariant (Prop 1),
+        # so this unfreezes the spread-dominant channel without breaking the
+        # invariance guarantee. Warm-started from the closed-form diag-WCCN vector.
+        krc = key_remetrize_config or {}
+        self.use_key_remetrize = bool(krc.get("enabled", False))
+        if self.use_key_remetrize:
+            init_path = krc.get("init_path")
+            if init_path:
+                import numpy as _np
+                init_vec = _np.load(init_path).astype("float32")
+                assert init_vec.shape[0] == self.input_dim, (
+                    f"key_remetrize init dim {init_vec.shape[0]} != input_dim {self.input_dim}")
+                init_t = torch.from_numpy(init_vec)
+            else:
+                init_t = torch.ones(self.input_dim)
+            # learnable=false keeps the closed-form vector fixed during training
+            # (requires_grad=False -> optimizer skips it; still in state_dict).
+            self.key_scale = nn.Parameter(
+                init_t, requires_grad=bool(krc.get("learnable", True)))
+        else:
+            self.register_parameter("key_scale", None)
 
         # Input projection
         self.input_proj = nn.Linear(self.input_dim, hidden_dim)
@@ -1059,8 +1084,10 @@ class SpectralGNN(nn.Module):
         # Output projection: 256 -> context_dim
         context = self.output_proj(h)
 
-        # L2 normalize each part so both contribute equally to distance metrics
-        raw_norm = F.normalize(x_raw, p=2, dim=-1)
+        # L2 normalize each part so both contribute equally to distance metrics.
+        # Optional learned diagonal re-metrization of the invariant key (yaw-invariant).
+        x_key = x_raw * self.key_scale if self.key_scale is not None else x_raw
+        raw_norm = F.normalize(x_key, p=2, dim=-1)
         ctx_norm = F.normalize(context, p=2, dim=-1)
 
         # Residual gate: scale ctx contribution per-node based on hidden state.
@@ -1197,8 +1224,10 @@ class SpectralGNN(nn.Module):
 
         context = self.output_proj(h)
 
-        # L2 normalize each part so both contribute equally to distance metrics
-        raw_norm = F.normalize(x_raw, p=2, dim=-1)
+        # L2 normalize each part so both contribute equally to distance metrics.
+        # Optional learned diagonal re-metrization of the invariant key (yaw-invariant).
+        x_key = x_raw * self.key_scale if self.key_scale is not None else x_raw
+        raw_norm = F.normalize(x_key, p=2, dim=-1)
         ctx_norm = F.normalize(context, p=2, dim=-1)
         if self.use_residual_gate and self.gate is not None:
             alpha = torch.sigmoid(self.gate(self._gate_input(h, data)))
@@ -1513,6 +1542,7 @@ def create_spectral_gnn(
     dual_stream_config: Optional[dict] = None,
     sensor_gate_config: Optional[dict] = None,
     diffattn_value_source: str = "diff",
+    key_remetrize_config: Optional[dict] = None,
 ) -> nn.Module:
     """
     Factory function to create GNN model
@@ -1559,6 +1589,7 @@ def create_spectral_gnn(
         phase_coherence_config=phase_coherence_config,
         sensor_gate_config=sensor_gate_config,
         diffattn_value_source=diffattn_value_source,
+        key_remetrize_config=key_remetrize_config,
     )
 
     # Optional dual-stream wrapper: magnitude (existing) + phase (yaw-invariant)
