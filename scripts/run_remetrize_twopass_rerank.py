@@ -107,7 +107,8 @@ def main(seeds):
                         skip_frames=SKIP, n_coarse=800, range_freqs=4, bev_freqs=8,
                         n_sectors=60, sketch_bev_weights=W_BEV,
                         sketch_range_weights=W_RANGE, rerank_mode="sketch_fft")
-                    report[name][variant] = {k: v["R@1"] for k, v in res.items()}
+                    report[name][variant] = {
+                        k: v["R@1"] for k, v in res.items() if not k.startswith("_")}
                 nq = len(_find_queries(poses, DTH, SKIP))
                 report[name]["n_q"] = nq
                 best = {v: max(report[name][v].values()) for v in ("P", "A", "B2")}
