@@ -40,6 +40,7 @@ CKPTS = {
     "seed1": REPO / "checkpoints/800d_4sensor_20260511_161726/best_model.pth",
     "seed2": REPO / "checkpoints/800d_4sensor_seed2_20260604_125426/best_model.pth",
     "seed3": REPO / "checkpoints/800d_4sensor_seed3_20260623_132834/best_model.pth",
+    "s5": REPO / "checkpoints/remetrize_twopass_s1/best_model.pth",
 }
 SENSORS = {
     "kitti": ["00", "05", "08"], "nclt": ["2012-01-08", "2013-01-10"],
