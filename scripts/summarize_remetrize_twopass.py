@@ -32,16 +32,42 @@ def aggregates(per_seq, counts):
 
 
 def main():
+    import sys
+    suffix = "_raw" if "raw" in sys.argv[1:] else ""
+    do_global = "global" in sys.argv[1:]
+
     best = {v: {s: [] for s in ORDER} for v in VARIANTS}
+    grids = {v: {s: [] for s in ORDER} for v in VARIANTS}  # dict-per-seed of weight->R@1
     counts = None
     for seed in SEEDS:
         coarse = json.load(open(DIR / f"{seed}.json"))
-        rerank = json.load(open(DIR / f"rerank_{seed}.json"))
+        rerank = json.load(open(DIR / f"rerank{suffix}_{seed}.json"))
         counts = {s: rerank[s]["n_q"] for s in ORDER}
         for v in VARIANTS:
             for s in ORDER:
                 fused = max(rerank[s][v].values())
                 best[v][s].append(max(coarse[v]["per_seq"][s], fused))
+                grids[v][s].append(rerank[s][v])
+
+    if do_global:
+        # one (w_bev, w_range) pair fixed across ALL sequences/sensors,
+        # chosen to maximize the baseline P's 3-seed query-weighted mean.
+        keys = sorted(grids["P"][ORDER[0]][0].keys())
+        n = np.array([counts[s] for s in ORDER], dtype=float)
+
+        def rq(v, key):
+            vals = np.array([[grids[v][s][i][key] for s in ORDER] for i in range(len(SEEDS))])
+            return float((vals.mean(axis=0) * n).sum() / n.sum())
+
+        best_key = max(keys, key=lambda k: rq("P", k))
+        print(f"[global fixed weight] selected by P: {best_key}")
+        for v in VARIANTS:
+            per_seq = {s: float(np.mean([grids[v][s][i][best_key] for i in range(len(SEEDS))]))
+                       for s in ORDER}
+            agg = aggregates(per_seq, counts)
+            print(f"  {v}: R^q={agg['R^q']:.4f} R^s={agg['R^s']:.4f} "
+                  f"sigma={agg['sigma_cross']:.4f} R_min={agg['R_min']:.4f}")
+        print()
 
     print(f"{'sequence':<20}" + "".join(f"{v:>10}" for v in VARIANTS) + "   (3-seed mean, per-seq best)")
     for s in ORDER:
