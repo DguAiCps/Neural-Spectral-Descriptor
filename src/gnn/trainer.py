@@ -1279,6 +1279,18 @@ class GNNTrainer:
             graph, refine_descs, **edge_kwargs_merged,
         )
 
+        # Rebuilding edges invalidates the pose-GT labels consumed by the
+        # edge-aux BCE (stale length -> mask/tensor shape mismatch). Recompute
+        # them for the new edge set; temporal edges stay forced to 1.
+        if getattr(graph, 'edge_pose_label', None) is not None:
+            device_g = graph.edge_index.device
+            pos_t = torch.from_numpy(poses[:, :3, 3]).float().to(device_g)
+            ei = graph.edge_index
+            edge_d = (pos_t[ei[0]] - pos_t[ei[1]]).norm(dim=1)
+            labels = (edge_d < float(fit_kwargs.get('pos_dist', 5.0))).float()
+            labels[graph.edge_type == 0] = 1.0
+            graph.edge_pose_label = labels
+
         # Save state so validate() can apply matching refinement to val graphs.
         # This keeps train and val graphs structurally consistent (same edge
         # building policy in the same ctx subspace).

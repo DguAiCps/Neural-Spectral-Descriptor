@@ -959,6 +959,9 @@ class SpectralGNN(nn.Module):
         # _last_edge_conf: sigmoid(logit) ∈ [0, 1] for BCE supervision + diagnostic.
         if self.edge_gate is not None and edge_embed is not None and edge_type is not None:
             edge_logit = self.edge_gate(edge_embed, edge_type)   # (E, 1) raw
+            # Soft-clip the additive attention bias to +-4: unbounded logits
+            # overflow under AMP/FP16 and NaN the whole embedding by mid-training.
+            edge_logit = 4.0 * torch.tanh(edge_logit / 4.0)
             self._last_edge_conf = torch.sigmoid(edge_logit)     # (E, 1) for BCE
         else:
             edge_logit = None
