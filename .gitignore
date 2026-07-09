@@ -22,6 +22,8 @@ baselines/weights/
 docs/
 *.pth
 *.pt
+# paper-main artifact (small, tracked; see artifacts/MANIFEST.md)
+!artifacts/edge_classifier.pt
 
 # Data
 data/

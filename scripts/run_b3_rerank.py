@@ -22,7 +22,7 @@ from build_and_train_edge_classifier import edge_features, range_phase_flat, Edg
 
 CACHE = REPO / "data/preprocessed_cross_sensor_operating"
 RVEC = REPO / "artifacts/key_remetrize_r.npy"
-CLS = REPO / "results/_edge_cls/classifier.pt"
+CLS = REPO / "artifacts/edge_classifier.pt"
 OUT = REPO / "results/_remetrize_twopass"
 CKPTS = {
     "seed1": REPO / "checkpoints/800d_4sensor_20260511_161726/best_model.pth",
