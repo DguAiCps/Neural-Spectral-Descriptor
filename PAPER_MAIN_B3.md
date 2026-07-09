@@ -106,6 +106,26 @@ Training-side runs (stage-5 etc.) additionally require the mandatory CLI overrid
 
 ## 6. Paper integration checklist (from docs/analysis/ab3_changes_report_ko.tex)
 
+> STATUS: all five items APPLIED to docs/paper/body_v1.5/aaai2027_body.tex on 2026-07-09
+> (builds clean: submission 9 pp / anonymous 28 pp, 0 errors / 0 overfull). New labels:
+> eq:remetrize (omega re-metrization), sec:edge_selection + eq:edge_selection (E'_sim,
+> classifier eta, features z_ij), app:edge_selection (details + tab:refine_ladder + oracle
+> + fusion-protocol disclosure + negative results), app:limitations (defensive/limitation
+> notes consolidated out of the main text per user request). Page budget was reclaimed by
+> moving tab:aliasrate + tab:miss_decomp into app:aliasrate, dropping the two Table-1
+> indented KITTI sub-rows (redundant with tab:reranker_ablation), narrowing figs 1/2/3, and
+> prose compression.
+>
+> HEADLINE PROTOCOL (user decision 2026-07-09): per-sequence fusion-weight selection = 0.796
+> is the reported headline. Backed by a measured train-calibration (scripts/
+> calibrate_rerank_weights_train.py + summarize_rerank_calibration.py, seed1, 23 train seqs,
+> data/preprocessed_cross_sensor_bev_layout): per-sensor weights calibrated on TRAIN activate
+> phase only on KITTI (BEV0.5, +10.2 pp train) and disable it elsewhere — MulRan phase is
+> +1.4 pp on val but -1.6 pp on train, so calibration correctly switches it off. Applied to
+> val = 0.785. Both tuning-free bounds (per-sensor-train 0.785, global coarse 0.773) also
+> surpass SC++ 0.760; all three are stated in the app:edge_selection disclosure paragraph.
+> Kept for audit:
+
 1. New subsection after §3.3 "learned edge selection": the C_i / phi / h / E''_sim equations
    (LaTeX already drafted in the report tex; keep paper notation).
 2. Eq. 10 gains r with its one-line closed-form definition + invariance sentence.
