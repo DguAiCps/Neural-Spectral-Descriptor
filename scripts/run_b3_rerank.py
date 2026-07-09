@@ -24,7 +24,11 @@ CACHE = REPO / "data/preprocessed_cross_sensor_operating"
 RVEC = REPO / "artifacts/key_remetrize_r.npy"
 CLS = REPO / "results/_edge_cls/classifier.pt"
 OUT = REPO / "results/_remetrize_twopass"
-CKPT = REPO / "checkpoints/800d_4sensor_20260511_161726/best_model.pth"
+CKPTS = {
+    "seed1": REPO / "checkpoints/800d_4sensor_20260511_161726/best_model.pth",
+    "seed2": REPO / "checkpoints/800d_4sensor_seed2_20260604_125426/best_model.pth",
+    "seed3": REPO / "checkpoints/800d_4sensor_seed3_20260623_132834/best_model.pth",
+}
 SENSORS = {
     "kitti": ["00", "05", "08"], "nclt": ["2012-01-08", "2013-01-10"],
     "helipr": ["Town01"], "mulran": ["DCC03", "KAIST03", "Riverside03"],
@@ -40,7 +44,7 @@ def r1(emb, poses):
     return _score(poses, q, ranked, [1], DTH)["R@1"]
 
 
-def main():
+def main(seed='seed1'):
     cfg = _apply_encoder_preset(
         yaml.safe_load(open(REPO / "configs/training_multi_dataset.yaml")), "no_interdiff")
     cfg["gnn"]["use_residual_gate"] = True
@@ -48,7 +52,7 @@ def main():
     rm_cfg = copy.deepcopy(cfg)
     rm_cfg["gnn"]["key_remetrize"] = {"enabled": True, "init_path": str(RVEC)}
     r = np.load(RVEC).astype(np.float32)
-    model = _make_model(rm_cfg, CKPT, DEVICE)
+    model = _make_model(rm_cfg, CKPTS[seed], DEVICE)
 
     blob = torch.load(CLS, map_location="cpu", weights_only=False)
     clf = EdgeMLP(N_FEAT)
@@ -125,9 +129,10 @@ def main():
             report[name] = {"coarse": coarse, "grid": grid, "best": max(max(grid.values()), coarse)}
             print(f"[b3] {name:<20} coarse={coarse:.3f} best={report[name]['best']:.3f}", flush=True)
 
-    json.dump(report, open(OUT / "b3_rerank_seed1.json", "w"), indent=1)
-    print("saved", OUT / "b3_rerank_seed1.json", flush=True)
+    json.dump(report, open(OUT / f"b3_rerank_{seed}.json", "w"), indent=1)
+    print("saved", OUT / f"b3_rerank_{seed}.json", flush=True)
 
 
 if __name__ == "__main__":
-    main()
+    for s in (sys.argv[1:] or ["seed1"]):
+        main(s)
