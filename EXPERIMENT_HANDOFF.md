@@ -5,34 +5,19 @@ Date: 2026-05-10 (reported 800D rows frozen)
 This branch is for continuing NSD encoder compression and gated-GAT experiments.
 It is intentionally separated from the main paper repository state.
 
-## Reported 800D configurations (FROZEN as of 2026-05-10)
+## Reported 800D configuration (FROZEN as of 2026-05-10)
 
-The NeurIPS 2026 paper now reports two distinct 800D operating points.
-Do not conflate them:
-
-Shared retrieval key for both:
+There is exactly one deployed NSD architecture; it applies identically to KITTI, NCLT, HeLiPR, and MulRan.
 
 - Encoder: `no_interdiff` preset (288D invariant magnitude key)
 - GAT: fixed-alpha gated DiffAttnConv (`gate_initial_alpha=0.0625`),
   NO sensor-aware gate, NO sensor-balanced sampling
 - Retrieval key total: 416D = 288D magnitude + 128D gated context
-
-Four-sensor Table 1 headline:
-
 - Train config: `configs/training_multi_dataset.yaml`
 - Phase-alignment sketch: cylindrical+BEV 384D
   (`range 16×4×2 = 128D` + `BEV 16×8×2 = 256D`)
-- Reranker: closed-form cyclic-shift cosine (Eq. rerank_base)
+- Reranker: closed-form cyclic-shift cosine (Eq. 6)
 - Results source: paper Table 1, full 9 held-out sequences
-
-KITTI learned-residual sub-row:
-
-- Train config: `configs/training_kitti_only.yaml`
-- Phase-alignment sketch: BEV-only max-height 384D
-  (`16 rows × 12 freqs × 2`)
-- Reranker: zero-init residual MLP (Eq. rerank_residual), trained on
-  KITTI 01/02/06/07
-- Results source: paper Table reranker_ablation, KITTI 00/05/08 only
 
 Eval entry point:
 
@@ -40,24 +25,6 @@ Eval entry point:
 scripts/evaluate_kitti_checkpoint.py \
   --enable-bev-layout --enable-phase-sketch --phase-rerank-mode sketch_fft
 ```
-
-Reranker training entry:
-
-```bash
-scripts/train_kitti_learned_reranker.py
-```
-
-The headline KITTI numbers are:
-
-| Variant                               | KITTI 00 | KITTI 05 | KITTI 08 | source |
-| ------------------------------------- | -------: | -------: | -------: | ------ |
-| SC++ (reference)                      | 0.962    | 0.942    | 0.843    | paper Tab.1 |
-| Closed-form rerank (single seed)      | 0.9794   | 0.9523   | 0.8468   | paper Tab.reranker_ablation |
-| Zero-init residual reranker (mean s1,s2) | 0.9691   | 0.9589   | 0.8617   | paper Tab.reranker_ablation |
-
-NCLT zero-shot transfer of the learned residual is a paper limitation
-(see Appendix `app:transfer_limit`); the 4-sensor row of Table 1 uses
-the closed-form reranker only.
 
 ## Ablations (paper appendix only)
 
@@ -80,10 +47,9 @@ The following are reported as ablations and ARE NOT part of either reported
   - NCLT held-out (KITTI+NCLT checkpoint, n=800): +14.0 %p macro
     (max-only 0.3218 → physics3 0.4619; 2012-01-08 0.2805 → 0.4499,
     2013-01-10 0.3631 → 0.4738).
-  The KITTI learned-reranker track keeps max-only because KITTI 08 is the
-  reverse-loop stress case; the four-sensor headline keeps cylindrical+BEV.
-  Physics3 is reported as a physically grounded sensor-adaptation ablation,
-  not a pure negative (Appendix `app:physics3`, Table `tab:physics3_nclt`).
+  The four-sensor row keeps cylindrical+BEV. Physics3 is reported as a
+  physically grounded sensor-adaptation ablation, not a pure negative
+  (Appendix `app:physics3`, Table `tab:physics3_nclt`).
 
 The runner `scripts/run_retrain_combine_eval.sh` reproduces these
 negative ablations and is annotated as ABLATION-ONLY in its header
@@ -113,8 +79,6 @@ It runs the following stages in order:
 1. Retrain the 416D retrieval key with sensor-aware GAT + `abs_diff` messages.
 2. Evaluate GAT-only KITTI 00/05/08.
 3. Evaluate the 800D analytic state: 416D GAT key + 384D physics3 phase sketch.
-4. Train the learned residual reranker on the physics3 phase sketch.
-5. Evaluate the combined 800D ablation model on NCLT zero-shot.
 
 Default config:
 
@@ -239,11 +203,9 @@ src/encoding/cross_spectrum.py
 src/encoding/bev_image.py
 src/encoding/spectral_encoder.py
 src/gnn/model.py
-src/gnn/learned_reranker.py
 train_multi_dataset.py
 scripts/evaluate_kitti_checkpoint.py
 scripts/evaluate_nclt_checkpoint.py
-scripts/train_kitti_learned_reranker.py
 scripts/summarize_retrain_combine_eval.py
 scripts/run_kitti_operating_point.py
 tests/test_cross_spectrum.py
@@ -255,7 +217,7 @@ tests/test_gnn_gate.py
 ```bash
 for preset in no_interdiff mean_diff rows12_full cross4_no_interdiff cross8_no_interdiff; do
   CUDA_VISIBLE_DEVICES=3 python3 scripts/evaluate_kitti_checkpoint.py \
-    --config configs/training_kitti_only.yaml \
+    --config configs/training_multi_dataset.yaml \
     --encoder-preset "$preset" \
     --skip-checkpoint \
     --sequences 00 05 08 \
@@ -276,7 +238,7 @@ done
 
 ```bash
 CUDA_VISIBLE_DEVICES=3 python3 train_multi_dataset.py \
-  --config configs/training_kitti_only.yaml \
+  --config configs/training_multi_dataset.yaml \
   --encoder-preset no_interdiff \
   --use-gated-context \
   --gate-initial-alpha 0.0625 \
@@ -288,7 +250,7 @@ CUDA_VISIBLE_DEVICES=3 python3 train_multi_dataset.py \
 
 ```bash
 CUDA_VISIBLE_DEVICES=3 python3 scripts/evaluate_kitti_checkpoint.py \
-  --config configs/training_kitti_only.yaml \
+  --config configs/training_multi_dataset.yaml \
   --encoder-preset no_interdiff \
   --use-gated-context \
   --gate-initial-alpha 0.0625 \
@@ -436,71 +398,18 @@ enough to replace pairwise phase-sketch alignment.
 | power dual-stream GAT | 416D | 0.9304 | 0.8302 | 0.3872 | no 08 gain |
 | bispectrum dual-stream GAT | 416D | 0.9272 | 0.8223 | 0.3915 | no 08 gain |
 | BEV phase-sketch rerank | 800D | 0.9794 | 0.9523 | 0.8468 | closed-form pairwise alignment |
-| learned reranker, random MLP | 800D | 0.8877 | 0.9337 | 0.7957 | unstable, best avg 0.8842 |
-| learned residual reranker, seed 1 | 800D | 0.9699 | 0.9549 | 0.8638 | best avg 0.9453 |
-| learned residual reranker, seed 2 | 800D | 0.9684 | 0.9629 | 0.8596 | best avg 0.9461 |
-| learned residual reranker, mean | 800D | 0.9691 | 0.9589 | 0.8617 | std 0.0008/0.0040/0.0021 |
-| adaptive-gated residual, seed 3 | 800D | 0.9715 | 0.9549 | 0.8553 | safer on 00, weaker on 08 |
 
 Key conclusion: the strong signal is not generic "phase identity". It is the
 candidate-specific yaw/column-shift alignment curve. `|z|^2` and bispectrum are
 yaw-invariant, but they do not perform pairwise shift matching, so a single-pass
-GAT key remains far below the phase-sketch reranker on KITTI 08.
+GAT key remains far below the closed-form phase-sketch reranker on KITTI 08.
 
-The learned residual reranker keeps the closed-form phase peak as the base score:
+The reranker uses the closed-form phase peak as the score (Eq. 6):
 
 ```text
 score(q,c) = w_phase * max_s corr_phase(q,c,s)
            + w_emb   * cosine(emb_q, emb_c)
-           + MLP_residual(corr_phase_curve, stats)
 ```
-
-The final linear residual is zero-initialized, so epoch 0 starts from the
-closed-form reranker instead of a random ranking function. This avoids the
-00/05 collapse seen in the random MLP reranker and lets training add a small
-correction. Current best checkpoint:
-
-```text
-results/kitti_learned_reranker_bev384_residual.pth
-results/kitti_learned_reranker_bev384_residual.json
-results/kitti_learned_reranker_bev384_residual_seed2.pth
-results/kitti_learned_reranker_bev384_residual_seed2.json
-results/kitti_learned_reranker_bev384_residual_adaptive_seed3.pth
-results/kitti_learned_reranker_bev384_residual_adaptive_seed3.json
-```
-
-Recommended paper wording: report this as an explicit two-stage learned
-phase-alignment head, not as the pure single-pass NSD/GNN descriptor. The pure
-416D GAT path is useful as a negative ablation showing why candidate-level phase
-alignment is necessary.
-
-Adaptive residual gate note: `--adaptive-residual-gate` suppresses the learned
-residual through a query-level gate derived from the base score top-1/top-2
-margin. In seed 3 it reduced the KITTI 00 regression (0.9715 vs. 0.9691 mean)
-but also reduced the KITTI 08 gain (0.8553 vs. 0.8617 mean), so the ungated
-residual remains the stronger headline row for now.
-
-NCLT zero-shot transfer result: a KITTI-trained residual reranker does **not**
-transfer to NCLT without calibration.
-
-| Variant | Residual scale | 2012-01-08 | 2013-01-10 | Avg R@1 | Notes |
-| --- | ---: | ---: | ---: | ---: | --- |
-| KITTI residual reranker zero-shot | 1.0 | 0.1396 | 0.1600 | 0.1422 | learned residual active |
-| KITTI base score zero-shot | 0.0 | 0.1418 | 0.1631 | 0.1445 | closed-form base only |
-
-Result files:
-
-```text
-results/nclt_learned_reranker_zero_shot_seed1.json
-results/nclt_learned_reranker_zero_shot_seed1_metadata.json
-results/nclt_learned_reranker_zero_shot_seed1_base_only.json
-```
-
-The base-only result is almost identical to the learned-residual result, so the
-transfer failure is not just residual overfitting. The KITTI-trained 416D
-retrieval key plus BEV phase-alignment base score is itself poorly calibrated
-for NCLT. Report this as a limitation and use joint training or dataset-specific
-calibration for cross-dataset claims.
 
 Cross/magcross note: keep `cross_spectrum` and `bev_cross` paths as ablation
 code only. The main config already uses `cross_spectrum.enabled: false` and
@@ -589,7 +498,7 @@ python3 scripts/evaluate_kitti_checkpoint.py \
   --phase-sketch-range-weights 0.0
 ```
 
-For learned reranker training/eval, use the same `--bev-height-encoding
+For phase-sketch eval, use the same `--bev-height-encoding
 physics3 --bev-row-pool 48 --bev-freqs 4`. This preserves the 800D stored state
 (`416D retrieval key + 384D physics-aware phase sketch`) while injecting
 domain knowledge that should matter most for sparse sensors.
@@ -626,10 +535,9 @@ physics3 384D sketch:     00 0.9794 / 05 0.9655 / 08 0.7787
 
 Conclusion: physics3 is correctly wired, but the 3-channel/4-frequency
 allocation hurts KITTI 08 reverse-loop discrimination. It improves KITTI 05
-and preserves KITTI 00, but the 08 drop is too large for a KITTI learned-
-reranker swap. Keep max-BEV 384D as the KITTI learned-reranker sketch. Report
-physics3 as an ablation/future-work direction for multi-sensor physical
-encoding, not as a reported 800D main row.
+and preserves KITTI 00, but the 08 drop is too large. Report physics3 as an
+ablation/future-work direction for multi-sensor physical encoding, not as a
+reported 800D main row.
 
 NCLT fixed-alpha held-out control with the KITTI+NCLT checkpoint
 (`train_kitti_nclt_nointerdiff288_gate00625_seed1/best_model.pth`):
@@ -645,9 +553,8 @@ physics3 384D:
 Updated interpretation: physics3 is not globally bad. It is a
 sensor-adaptation win on HDL-32/NCLT under the same 384D budget (+14.0 %p
 macro over max-BEV in the held-out control), but it loses too much
-high-frequency azimuthal evidence for KITTI 08 reverse loops. The KITTI
-learned-reranker track should stay max-BEV for KITTI SOTA, and the four-sensor
-headline should stay cylindrical+BEV. Physics3 should be reported as a
+high-frequency azimuthal evidence for KITTI 08 reverse loops. The four-sensor
+NSD row keeps cylindrical+BEV. Physics3 should be reported as a
 physics-grounded sparse-sensor ablation and follow-up direction, with a larger
 budget (e.g. 48 rows * 8 freqs * 2 = 768D) or sensor-conditional phase budget
 as the next experiment.
@@ -657,14 +564,12 @@ Sensor-aware GAT result:
 ```text
 GAT-only:          00 0.9209 / 05 0.8223 / 08 0.3957
 physics3 sketch:   00 0.9763 / 05 0.9655 / 08 0.7745
-learned reranker:  00 0.9747 / 05 0.9576 / 08 0.7404
 NCLT zero-shot:    12-01 0.3376 / 13-01 0.4062
 ```
 
 The regularized sensor-aware gate stabilized alpha separation but did not
 improve retrieval. Treat this as a Section 6 ablation/negative result:
 regularization can prevent gate collapse, but the shared GAT operator plus
-balanced downsampling did not yield a stronger descriptor. Both reported main
-paths should remain fixed-alpha GAT. The KITTI learned-reranker track should remain
-max-BEV 384D phase sketch + learned residual reranker; the four-sensor headline
-should remain cylindrical+BEV 384D + closed-form reranker.
+balanced downsampling did not yield a stronger descriptor. The reported main
+path should remain fixed-alpha GAT with the cylindrical+BEV 384D phase sketch
+scored by the closed-form reranker.

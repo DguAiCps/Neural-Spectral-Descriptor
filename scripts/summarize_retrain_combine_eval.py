@@ -46,25 +46,6 @@ def _sequence_r1(payload: Any) -> dict[str, float]:
     return out
 
 
-def _best_reranker_metrics(payload: Any) -> dict[str, float]:
-    if not isinstance(payload, dict):
-        return {}
-    metrics = payload.get("best_metrics", payload.get("metrics", payload))
-    if not isinstance(metrics, dict):
-        return {}
-    out: dict[str, float] = {}
-    for key, value in metrics.items():
-        if key.startswith("_"):
-            continue
-        r1 = _first_metric(value, ("recall@1", "R@1", "recall_at_1"))
-        if r1 is not None:
-            out[str(key)] = r1
-    avg = _first_metric(metrics.get("_average", {}), ("recall@1", "R@1", "recall_at_1"))
-    if avg is not None:
-        out["_average"] = avg
-    return out
-
-
 def _best_phase_sketch_metrics(payload: Any) -> tuple[dict[str, float], dict[str, str]]:
     """Extract the best phase-sketch fusion R@1 per sequence.
 
@@ -109,16 +90,11 @@ def main() -> None:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--kitti-gat", required=True)
     parser.add_argument("--kitti-sketch", required=True)
-    parser.add_argument("--kitti-reranker", required=True)
-    parser.add_argument("--nclt", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
     kitti_gat = _load(args.kitti_gat)
     kitti_sketch = _load(args.kitti_sketch)
-    kitti_reranker = _load(args.kitti_reranker)
-    nclt = _load(args.nclt)
-    nclt_metrics = nclt.get("metrics", nclt) if isinstance(nclt, dict) else nclt
     kitti_sketch_r1, kitti_sketch_best_keys = _best_phase_sketch_metrics(kitti_sketch)
 
     summary = {
@@ -131,14 +107,10 @@ def main() -> None:
         "files": {
             "kitti_gat": args.kitti_gat,
             "kitti_sketch": args.kitti_sketch,
-            "kitti_reranker": args.kitti_reranker,
-            "nclt": args.nclt,
         },
         "kitti_gat_only_r1": _sequence_r1(kitti_gat),
         "kitti_physics3_sketch_r1": kitti_sketch_r1,
         "kitti_physics3_sketch_best_keys": kitti_sketch_best_keys,
-        "kitti_learned_reranker_r1": _best_reranker_metrics(kitti_reranker),
-        "nclt_zero_shot_r1": _best_reranker_metrics(nclt_metrics),
     }
 
     out = Path(args.output)

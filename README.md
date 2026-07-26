@@ -20,13 +20,12 @@ results for ablation context, but it is not the current paper-main path.
 = 800D stored state
 ```
 
-Reported configurations:
+Reported configuration (the same architecture applies to all four sensors):
 
 | Configuration | Phase sketch | Reranker | Scope |
 | --- | --- | --- | --- |
-| Four-sensor headline (Table 1) | cylindrical+BEV 384D | closed-form cyclic-shift cosine | 9 validation sequences |
-| KITTI learned-residual (§3.4, `app:reranker_ablation`) | BEV-only max-height 384D | zero-init residual MLP | KITTI 00/05/08 |
-| Appendix ablation (`app:physics3`) | physics3 384D | closed-form or residual | not paper-main |
+| NSD (Table 1) | cylindrical+BEV 384D | closed-form cyclic-shift cosine (Eq. 6) | 9 validation sequences across KITTI/NCLT/HeLiPR/MulRan |
+| Appendix ablation (`app:physics3`) | physics3 384D | closed-form | not paper-main |
 
 ## Quick Start
 
@@ -69,19 +68,13 @@ KITTI closed-form max-BEV control:
 bash scripts/run_paper_kitti_closed_form.sh
 ```
 
-KITTI learned residual:
-
-```bash
-bash scripts/run_paper_kitti_residual.sh
-```
-
 NCLT held-out max-BEV / physics3 control:
 
 ```bash
 bash scripts/run_paper_nclt_physics3_control.sh
 ```
 
-The four-sensor headline row uses `configs/training_multi_dataset.yaml` with
+The four-sensor NSD row uses `configs/training_multi_dataset.yaml` with
 `--encoder-preset no_interdiff`, fixed-alpha GAT, and the cylindrical+BEV
 closed-form phase sketch. KITTI and NCLT have standalone release runners; the
 remaining HeLiPR/MulRan validation path is retained through the multi-dataset

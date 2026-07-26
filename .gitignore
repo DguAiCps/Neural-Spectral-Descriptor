@@ -92,3 +92,6 @@ _ablation/results/ablation_no_interdiff_gate_seed42/*
 !_ablation/results/ablation_no_interdiff_gate_seed42/best_model.pth
 # Keep professor's handoff checkpoints (KITTI-only baselines, ~4 MB total)
 !_ablation/_handoff/
+
+# External baseline repos + generated data (P-GAT, SeqOT)
+_external/

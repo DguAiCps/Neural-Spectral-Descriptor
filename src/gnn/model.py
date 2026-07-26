@@ -371,7 +371,9 @@ class DiffAttnConv(MessagePassing):
     value/message path also uses differences for backward compatibility. The
     optional ``value_source='abs_diff'`` adds an absolute-neighbor value branch
     W_abs h_j so the layer keeps keyframe identity while retaining diff-based
-    attention.
+    attention. ``value_source='standard'`` is the standard-attention ablation:
+    keys AND values come from the absolute neighbor h_j instead of the
+    difference (edge bias unchanged).
     Edge embeddings are applied as scalar bias to attention scores.
 
     Attention:
@@ -390,10 +392,10 @@ class DiffAttnConv(MessagePassing):
     ):
         super().__init__(aggr='add', node_dim=0)
 
-        if value_source not in {"diff", "abs_diff"}:
+        if value_source not in {"diff", "abs_diff", "standard"}:
             raise ValueError(
                 f"Unknown DiffAttnConv value_source={value_source!r}; "
-                "expected 'diff' or 'abs_diff'."
+                "expected 'diff', 'abs_diff' or 'standard'."
             )
 
         self.channels = channels
@@ -471,7 +473,11 @@ class DiffAttnConv(MessagePassing):
 
         # Edge-level features (bypass propagate to enable nested checkpoint)
         x_tgt = x[tgt]            # target node features (= x_i)
-        diff = x[src] - x_tgt     # difference (= x_j - x_i)
+        if self.value_source == "standard":
+            # Standard-attention ablation: keys/values from absolute h_j.
+            diff = x[src]
+        else:
+            diff = x[src] - x_tgt     # difference (= x_j - x_i)
 
         # --- Nested checkpoint: Q, K freed after attn scores produced ---
         def compute_attn_scores(x_tgt_in, diff_in, edge_attr_in, edge_logit_in):

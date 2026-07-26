@@ -480,7 +480,7 @@ def _evaluate_sequence(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/training_kitti_only.yaml")
+    parser.add_argument("--config", default="configs/training_multi_dataset.yaml")
     parser.add_argument("--root", default=None, help="KITTI dataset root containing poses/ and sequences/")
     parser.add_argument("--sequences", nargs="+", default=["00", "05", "08"])
     parser.add_argument("--cache-dir", default="data/preprocessed_kitti_operating")

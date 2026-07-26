@@ -4,7 +4,7 @@
 #   288D closed-form magnitude key + 128D sensor-aware GAT context + 384D phase sketch.
 #
 # This config trains only the 416D retrieval key. The 384D physics3 phase sketch
-# and learned residual reranker are trained/evaluated by scripts/run_retrain_combine_eval.sh.
+# is evaluated by scripts/run_retrain_combine_eval.sh.
 
 data:
   lazy_load: true

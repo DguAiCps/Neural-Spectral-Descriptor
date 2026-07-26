@@ -56,11 +56,24 @@ NAME_ALIASES = {
     "MulRan_Riverside03": ["MulRan_Riverside03", "MULRAN_Riverside03"],
 }
 
-YAW_BINS = {
-    "forward": lambda d: d <= 30.0,
-    "oblique": lambda d: (d > 30.0) & (d <= 90.0),
-    "reverse": lambda d: d > 90.0,
+YAW_BIN_SETS = {
+    "legacy": {
+        "forward": lambda d: d <= 30.0,
+        "oblique": lambda d: (d > 30.0) & (d <= 90.0),
+        "reverse": lambda d: d > 90.0,
+    },
+    "quad": {
+        "0-45": lambda d: d <= 45.0,
+        "45-90": lambda d: (d > 45.0) & (d <= 90.0),
+        "90-135": lambda d: (d > 90.0) & (d <= 135.0),
+        "135-180": lambda d: d > 135.0,
+    },
 }
+YAW_BIN_LABELS = {
+    "legacy": {"forward": "<=30", "oblique": "30-90", "reverse": ">90"},
+    "quad": {"0-45": "<=45", "45-90": "45-90", "90-135": "90-135", "135-180": ">135"},
+}
+YAW_BINS = YAW_BIN_SETS["legacy"]
 
 
 def find_per_query_path(base_dir: Path, dataset: str, method: str = None) -> Path:
@@ -97,7 +110,12 @@ def main():
                     help="If set, expect per-method subdirs <dir>/<method>/<dataset>.json. "
                          "Otherwise treat <dir>/<dataset>.json as a single-method dump.")
     ap.add_argument("--output", type=Path, required=True)
+    ap.add_argument("--bins", choices=list(YAW_BIN_SETS), default="legacy",
+                    help="Yaw bin set: legacy (<=30/30-90/>90) or quad (0-45/45-90/90-135/135-180).")
     args = ap.parse_args()
+
+    global YAW_BINS
+    YAW_BINS = YAW_BIN_SETS[args.bins]
 
     methods = args.methods if args.methods else [None]
     out_all: Dict[str, Dict[str, dict]] = {}
@@ -118,7 +136,7 @@ def main():
             out[dataset] = split
 
             line = f"[ok] {dataset:22s}"
-            for bin_name in ["forward", "oblique", "reverse", "all"]:
+            for bin_name in list(YAW_BINS) + ["all"]:
                 v = split[bin_name]
                 r1 = v["r1"]
                 n = v["n"]
@@ -129,8 +147,7 @@ def main():
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with open(args.output, "w") as f:
-        json.dump({"yaw_bins_deg": {"forward": "<=30", "oblique": "30-90",
-                                    "reverse": ">90"},
+        json.dump({"yaw_bins_deg": YAW_BIN_LABELS[args.bins],
                    "methods": out_all}, f, indent=2)
     print(f"\n[saved] {args.output}")
 

@@ -3,7 +3,7 @@ set -euo pipefail
 
 DEVICE="${DEVICE:-cuda}"
 CHECKPOINT="${CHECKPOINT:-results/train_no_interdiff_288_gate00625_seed1/best_model.pth}"
-CONFIG="${CONFIG:-configs/training_kitti_only.yaml}"
+CONFIG="${CONFIG:-configs/training_multi_dataset.yaml}"
 OUTPUT="${OUTPUT:-results/kitti_checkpoint_eval_nointerdiff288_gate00625_bevonly384_sketch_fft_n800.json}"
 KITTI_CACHE="${KITTI_CACHE:-data/preprocessed_kitti_encoder_ablation_no_interdiff}"
 KITTI_BEV_CACHE="${KITTI_BEV_CACHE:-data/preprocessed_kitti_bev_layout}"

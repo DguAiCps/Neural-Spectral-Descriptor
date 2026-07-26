@@ -45,6 +45,7 @@ import baselines.lidar_iris
 import baselines.pointnetvlad
 import baselines.bevplace
 import baselines.nsc
+import baselines.ring_pp
 from baselines import REGISTRY, get_method
 
 

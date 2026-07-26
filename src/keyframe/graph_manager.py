@@ -1439,3 +1439,35 @@ def build_graph_from_keyframes_batch(
     graph.temporal_direction_mode = temporal_direction_mode
 
     return graph
+
+
+def filter_edges_by_type(graph: Data, mode: str) -> Data:
+    """Restrict a built graph to a single edge type (component ablations).
+
+    Keeps the edge-selection semantics of the full graph (temporal exclusion,
+    Bayesian/cosine top-k) and only removes the other type's edges afterwards,
+    so 'similarity_only' does not let temporal neighbors re-enter as
+    similarity edges.
+
+    Args:
+        graph: PyG Data as produced by build_graph_from_keyframes_batch
+            (edge_index / edge_attr / edge_type, optionally edge_pose_label).
+        mode: 'both' (no-op), 'temporal_only' (keep type 0), or
+            'similarity_only' (keep type 1).
+
+    Returns:
+        The same graph object, filtered in place.
+    """
+    if mode in (None, 'both'):
+        return graph
+    if mode not in ('temporal_only', 'similarity_only'):
+        raise ValueError(f"Unknown edge_type_filter mode: {mode!r}")
+    keep = graph.edge_type == (0 if mode == 'temporal_only' else 1)
+    graph.edge_index = graph.edge_index[:, keep]
+    graph.edge_type = graph.edge_type[keep]
+    if getattr(graph, 'edge_attr', None) is not None:
+        graph.edge_attr = graph.edge_attr[keep]
+    label = getattr(graph, 'edge_pose_label', None)
+    if label is not None and label.numel() == keep.numel():
+        graph.edge_pose_label = label[keep]
+    return graph

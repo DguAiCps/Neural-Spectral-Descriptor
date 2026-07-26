@@ -1,0 +1,31 @@
+# P-GAT baseline training on OUR split (working config; see scripts/_pgat_train.py).
+# Mirrors _external/P-GAT/configs/training_config.yml with:
+#   FEATURE_DIM 256 -> 544 (our cached descriptors), POSE_DIM 2 (kept),
+#   EPOCH 418 -> 100 (first run), BATCHSIZE 256 -> 128 (feature dim is 2.1x
+#   theirs and subgraphs hold up to 80 nodes; GPU may be shared),
+#   HAS_VALIDATION True (real held-out-sequence val pass, theirs is broken),
+#   SAVE_INTERVAL 25.
+# TRAIN.WEIGHT is carried for fidelity but unused (their weighting code is
+# commented out in engine/trainer.py::weight_loss).
+DATA_DIR: '_external/pgat_data/'
+OUTPUT_DIR: '_external/pgat_runs/full/'
+SAVE_MODEL: True
+SEED: 0
+SOLVER:
+  EPOCH: 100
+  LR: 0.0001
+  BATCHSIZE: 128
+MODEL:
+  ATTENTION_GRAPH:
+    POSE_DIM: 2
+    FEATURE_DIM: 544
+    KEYPOINT_HIDDEN_DIM: [32, 64, 128]
+    NUM_HEADS: 4
+    NUM_LAYERS: 5
+    INCLUDE_POSE: True
+    DROPOUT: 0.0
+TRAIN:
+  SAVE_INTERVAL: 25
+  WEIGHT: [1.0, 0.0]
+  HAS_VALIDATION: True
+  POS_RATE: 0.3

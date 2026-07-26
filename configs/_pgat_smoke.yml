@@ -1,0 +1,26 @@
+# P-GAT smoke config: 2 epochs on the 2-sequence smoke tensors
+# (built by: python3 scripts/_pgat_make_tensors.py \
+#    --sequences kitti_06,kitti_07 --val-holdout kitti_06 \
+#    --out-dir _external/pgat_data_smoke)
+DATA_DIR: '_external/pgat_data_smoke/'
+OUTPUT_DIR: '_external/pgat_runs/smoke/'
+SAVE_MODEL: True
+SEED: 0
+SOLVER:
+  EPOCH: 2
+  LR: 0.0001
+  BATCHSIZE: 16
+MODEL:
+  ATTENTION_GRAPH:
+    POSE_DIM: 2
+    FEATURE_DIM: 544
+    KEYPOINT_HIDDEN_DIM: [32, 64, 128]
+    NUM_HEADS: 4
+    NUM_LAYERS: 5
+    INCLUDE_POSE: True
+    DROPOUT: 0.0
+TRAIN:
+  SAVE_INTERVAL: 2
+  WEIGHT: [1.0, 0.0]
+  HAS_VALIDATION: True
+  POS_RATE: 0.3

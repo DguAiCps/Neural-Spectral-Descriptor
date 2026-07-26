@@ -137,7 +137,7 @@ def _build_mulran_bev_cache(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/training_kitti_only.yaml")
+    parser.add_argument("--config", default="configs/training_multi_dataset.yaml")
     parser.add_argument("--encoder-preset", default="no_interdiff")
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--use-gated-context", action="store_true")

@@ -21,12 +21,9 @@ required_files=(
   src/data/mulran_loader.py
   src/data/multi_dataset_loader.py
   src/data/pose_utils.py
-  src/gnn/learned_reranker.py
   scripts/evaluate_kitti_checkpoint.py
   scripts/evaluate_nclt_checkpoint.py
-  scripts/train_kitti_learned_reranker.py
   scripts/run_paper_kitti_closed_form.sh
-  scripts/run_paper_kitti_residual.sh
   scripts/run_paper_nclt_physics3_control.sh
   scripts/restore_release_artifacts.sh
   scripts/make_release_bundle.sh
@@ -41,7 +38,6 @@ done
 
 for script in \
   scripts/run_paper_kitti_closed_form.sh \
-  scripts/run_paper_kitti_residual.sh \
   scripts/run_paper_nclt_physics3_control.sh \
   scripts/restore_release_artifacts.sh \
   scripts/make_release_bundle.sh; do
@@ -59,8 +55,6 @@ python3 -m py_compile \
   train_multi_dataset.py \
   scripts/evaluate_kitti_checkpoint.py \
   scripts/evaluate_nclt_checkpoint.py \
-  scripts/evaluate_nclt_learned_reranker.py \
-  scripts/train_kitti_learned_reranker.py \
   src/data/kitti_loader.py \
   src/data/mulran_loader.py \
   src/data/multi_dataset_loader.py \
@@ -68,7 +62,6 @@ python3 -m py_compile \
   src/encoding/bev_image.py \
   src/encoding/spectral_encoder.py \
   src/gnn/model.py \
-  src/gnn/learned_reranker.py \
   src/keyframe/graph_manager.py
 
 if [[ "${RUN_TESTS:-0}" == "1" ]]; then

@@ -1,5 +1,14 @@
 # PAPER MAIN (FROZEN): 800D + fixed re-metrization + learned edge selection (B3)
 
+> **PROTOCOL UPDATE 2026-07-20 (user-approved):** the paper headline now uses the
+> **train-calibrated per-sensor fusion weights** (KITTI (w_b,w_r)=(0.5,0), phase off elsewhere;
+> calibrated on the 23 cached train sequences, seed-1 embeddings, applied to all 3 seeds):
+> **R̄q 0.785 [0.785,0.786] / R̄s 0.758 / σ_cross 0.193 / R_min 0.467**;
+> per-seq means 0.980/0.949/0.816 (KITTI) · 0.542/0.392 (NCLT) · 0.550 (HeLiPR) ·
+> 0.752/0.995/0.844 (MulRan). The per-sequence best-of-grid figure below (0.796) is kept only as
+> an **evaluation-side upper bound**, and coarse 0.773 as the tuning-free floor. Reproduce with
+> `scripts/summarize_rerank_calibration.py`. Pipeline/configuration below is unchanged.
+
 Date frozen: 2026-07-09 · Branch: `feat/remetrize-twopass` · Decision: user-approved paper-main.
 This file is the canonical spec for the AAAI-27 paper main configuration. It supersedes the
 Table-1 v1.5 main (which becomes the "base NSD" ablation row). Written so a fresh session can

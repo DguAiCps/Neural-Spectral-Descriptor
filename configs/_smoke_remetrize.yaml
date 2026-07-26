@@ -1,39 +1,107 @@
-# KITTI-only configuration for urgent execution/debug experiments.
-# Uses the same encoder/GNN dimensions as the paper config (544D raw + 128D ctx).
-
 data:
   lazy_load: true
-  cache_dir: data/preprocessed_kitti
+  cache_dir: data/preprocessed
   datasets:
     train:
-      - type: kitti
-        root: /workspace/data/kitti/dataset
-        sequences: ['01', '02', '06', '07']
-        weight: 1.0
+    - type: helipr
+      root: /workspace/data/helipr
+      sequences:
+      - Town02
+      - Roundabout01
+      - Bridge01
+      - KAIST04
+      - DCC04
+      - Riverside04
+      weight: 1.0
+    - type: kitti
+      root: /workspace/data/kitti/dataset
+      sequences:
+      - '01'
+      - '02'
+      - '06'
+      - '07'
+      weight: 1.0
+    - type: nclt
+      root: /workspace/data/nclt
+      sequences:
+      - '2012-05-11'
+      - '2012-08-04'
+      - '2012-11-04'
+      - '2012-11-16'
+      - '2013-02-23'
+      weight: 1.0
+    - type: mulran
+      root: /workspace/data/mulran
+      sequences:
+      - DCC01
+      - DCC02
+      - KAIST01
+      - KAIST02
+      - Riverside01
+      - Riverside02
+      - Sejong01
+      - Sejong02
+      - Sejong03
+      weight: 1.0
     val:
-      - type: kitti
-        root: /workspace/data/kitti/dataset
-        sequences: ['00', '05', '08']
-        weight: 1.0
+    - type: kitti
+      root: /workspace/data/kitti/dataset
+      sequences:
+      - '00'
+      - '05'
+      - 08
+      weight: 1.0
+    - type: nclt
+      root: /workspace/data/nclt
+      sequences:
+      - '2012-01-08'
+      - '2013-01-10'
+      weight: 1.0
+    - type: helipr
+      root: /workspace/data/helipr
+      sequences:
+      - Town01
+      weight: 1.0
+    - type: mulran
+      root: /workspace/data/mulran
+      sequences:
+      - DCC03
+      - KAIST03
+      - Riverside03
+      weight: 1.0
     test:
-      - type: kitti
-        root: /workspace/data/kitti/dataset
-        sequences: ['09', '10']
-        weight: 1.0
-
+    - type: kitti
+      root: /workspace/data/kitti/dataset
+      sequences:
+      - 09
+      - '10'
+      weight: 1.0
 encoding:
-  projection_type: 'range_image'
+  projection_type: range_image
   n_azimuth: 360
   max_range: 80.0
   min_range: 1.0
   n_elevation: 16
-  elevation_range: [-24.8, 2.0]
+  elevation_range:
+  - -24.8
+  - 2.0
   target_elevation_bins: 16
   sensor_elevation_ranges:
-    kitti: [-24.8, 2.0]
+    helipr:
+    - -15.0
+    - 15.0
+    kitti:
+    - -24.8
+    - 2.0
+    nclt:
+    - -30.67
+    - 10.67
+    mulran:
+    - -16.6
+    - 16.6
   bev:
     z_min: -3.0
-    height_encoding: 'iris'
+    height_encoding: iris
     n_height_layers: 8
     z_max: 5.0
   binning_strategy: octave
@@ -41,21 +109,27 @@ encoding:
   alpha: 2.0
   learnable_alpha: true
   epsilon: 1.0e-08
-  bin_statistics: ['mean', 'std']
-  inter_bin_statistics: ['diff']
+  bin_statistics:
+  - mean
+  - std
+  inter_bin_statistics:
+  - diff
   zero_center: false
   log_magnitude: false
   normalize_channels: false
   spectral_policy:
     enabled: true
-    type: 'soft_binning'
+    type: soft_binning
     output_dim: 544
     shared_across_rings: false
     soft_binning:
       n_soft_bins: 9
-      stats: ['mean', 'std']
-      inter_stats: ['diff']
-      init_mode: 'octave'
+      stats:
+      - mean
+      - std
+      inter_stats:
+      - diff
+      init_mode: octave
       alpha: 2.0
     linear:
       d_per_ring: 14
@@ -73,7 +147,6 @@ encoding:
     warmup_epochs: 3
   quantization_bits: 16
   descriptor_size: 544
-
 keyframe:
   distance_threshold: 0.8
   rotation_threshold: 20.0
@@ -85,29 +158,25 @@ keyframe:
   max_active_nodes: 1000
   freeze_old_embeddings: true
   graph:
-    similarity_metric: 'cosine'
-    edge_method: 'bayesian'
+    similarity_metric: cosine
+    edge_method: bayesian
     similarity_threshold: 0.993
     similarity_max_k: 10
-    similarity_min_k: 0
     similarity_exclude_temporal: true
-    temporal_edge_mode: 'bidirectional'
-    temporal_direction_mode: 'none'
     confidence_level: 0.085
     base_prior: 0.01
     density_k: 50
     density_beta: 10.0
-    n_samples: 300000
-    prior_signal: 'density'
+    n_samples: 1000000
+    prior_signal: density
     multiscale_min_consistency: 0.0
     two_pass:
       enabled: false
       warmup_epochs: 10
       refine_every: 5
-      refine_space: 'ctx'
+      refine_space: ctx
     use_pose_gt_edges: false
     pose_gt_edge_max_k: 10
-
 gnn:
   input_dim: 544
   hidden_dim: 128
@@ -120,7 +189,7 @@ gnn:
   n_heads: 4
   dropout: 0.1
   residual: true
-  norm_type: 'batch_norm'
+  norm_type: batch_norm
   edge_encoding:
     d_edge: 32
     n_edge_types: 2
@@ -131,7 +200,9 @@ gnn:
   use_local_updates: true
   use_multi_gpu: false
   patience: 10
-
+  key_remetrize:
+    enabled: true
+    init_path: artifacts/key_remetrize_r.npy
 retrieval:
   top_k: 10
   spatial_filter_distance: 50.0
@@ -142,7 +213,6 @@ retrieval:
   icp_rmse_threshold: 0.5
   icp_max_iterations: 30
   voxel_downsample: 0.3
-
 system:
   device: cuda
   num_workers: 4
@@ -150,36 +220,28 @@ system:
   output_dir: outputs
   log_dir: logs
   checkpoint_dir: checkpoints
-
 logging:
   use_wandb: false
-  wandb_project: neural-spectral-codec-kitti
+  wandb_project: neural-spectral-codec-multi
   wandb_entity: null
   log_interval: 10
   save_interval: 1000
-
 training:
-  resume_from_checkpoint: results/ctx128_cosine_bayesian/best_model.pth
-  n_epochs: 60
-  learning_rate: 5.0e-04
+  n_epochs: 1
+  learning_rate: 0.0005
   weight_decay: 1.0e-05
   temperature: 0.1
   log_interval: 10
   use_amp: true
-  mine_every_n_epochs: 1
-  validate_every_n_epochs: 2
-  loss_type: 'infonce'
-  temperature_schedule:
-    enabled: false
-    start: 0.5
-    end: 0.05
+  mine_every_n_epochs: 5
+  validate_every_n_epochs: 1
+  loss_type: infonce
   smoothap:
     tau: 0.05
     n_pos: 8
     n_neg: 256
     batch_anchors: 32
   edge_aux_lambda: 0.0
-
 triplet:
   positive_distance_max: 5.0
   negative_distance_min: 10.0

@@ -187,6 +187,7 @@ class GNNTrainer:
         phase_token_aux_lambda: float = 0.0,
         checkpoint_metric: str = 'average_recall@1',
         recall_k_values: Optional[List[int]] = None,
+        mine_on_refined: bool = False,
     ):
         """
         Initialize trainer
@@ -272,6 +273,11 @@ class GNNTrainer:
         self.recall_k_values = sorted(set(int(k) for k in (recall_k_values or [1, 5, 10])))
         if 1 not in self.recall_k_values:
             self.recall_k_values.insert(0, 1)
+
+        # Ablation switch: mine hard negatives on the refined embeddings f
+        # (current GNN output) instead of the raw descriptors d. Default False
+        # keeps the production behavior (mining on stable raw descriptors).
+        self.mine_on_refined = mine_on_refined
 
         # SmoothAP mining cache (anchors, pos_pool, neg_pool)
         self._smoothap_anchors = None
@@ -675,7 +681,13 @@ class GNNTrainer:
 
             # Opt 7: Use descriptors param directly (already numpy on CPU)
             # instead of graph.x.cpu().numpy() which triggers GPU→CPU sync
-            mining_embeddings = descriptors
+            if self.mine_on_refined:
+                # Ablation ('mining on refined descriptors'): mine on the
+                # current GNN output f. Re-extracted at every re-mine epoch.
+                mining_embeddings = self.extract_all_embeddings(graph)
+                logging.info("  Mining space: refined embeddings f (ablation)")
+            else:
+                mining_embeddings = descriptors
 
             triplets = triplet_miner.mine_triplets(
                 descriptors=mining_embeddings,

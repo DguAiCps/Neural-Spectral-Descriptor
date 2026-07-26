@@ -13,8 +13,7 @@ Use these with command-line overrides:
 
 | Config | Use |
 | --- | --- |
-| `training_multi_dataset.yaml` | Four-sensor closed-form 800D headline |
-| `training_kitti_only.yaml` | KITTI learned-residual 800D sub-row |
+| `training_multi_dataset.yaml` | Four-sensor NSD 800D (applied identically to KITTI/NCLT/HeLiPR/MulRan) |
 
 The raw YAML defaults still describe the older 544D encoder. The override
 `--encoder-preset no_interdiff` is mandatory for the reported 288D magnitude

@@ -1066,6 +1066,9 @@ def main():
     similarity_exclude_temporal = graph_config.get('similarity_exclude_temporal', True)
     temporal_edge_mode = graph_config.get('temporal_edge_mode', 'bidirectional')
     temporal_direction_mode = graph_config.get('temporal_direction_mode', 'none')
+    # Component ablation: keep only one edge type after graph construction
+    # ('both' = no-op default; 'temporal_only' / 'similarity_only').
+    edge_type_filter = graph_config.get('edge_type_filter', 'both')
 
     # Adaptive prior signal and multi-scale consistency config
     prior_signal = graph_config.get('prior_signal', 'density')
@@ -1281,6 +1284,11 @@ def main():
                 )
             logging.info(f"  Phase-neighbor similarity edges attached: {n_phase_edges:,}")
 
+    if edge_type_filter != 'both':
+        from keyframe.graph_manager import filter_edges_by_type
+        train_graph = filter_edges_by_type(train_graph, edge_type_filter)
+        logging.info(f"  Edge-type filter '{edge_type_filter}' applied to training graph")
+
     train_graph_time = profiler.get_stats('build_train_graph')['total']
     has_edge_attr = train_graph.edge_attr is not None
     n_temporal = int((train_graph.edge_type == 0).sum()) if hasattr(train_graph, 'edge_type') else 0
@@ -1370,6 +1378,10 @@ def main():
                         temporal_exclude=phase_edges_cfg.get('temporal_exclude', 30),
                     )
                     logging.info(f"  {dataset_name} phase-neighbor edges attached: {n_val_phase:,}")
+            if edge_type_filter != 'both':
+                from keyframe.graph_manager import filter_edges_by_type
+                graph = filter_edges_by_type(graph, edge_type_filter)
+                info['graph'] = graph
             vt = int((graph.edge_type == 0).sum()) if hasattr(graph, 'edge_type') else 0
             vs = int((graph.edge_type == 1).sum()) if hasattr(graph, 'edge_type') else 0
             logging.info(
@@ -1425,6 +1437,7 @@ def main():
             dual_stream_config=config['gnn'].get('dual_stream'),
             sensor_gate_config=config['gnn'].get('sensor_gate'),
             diffattn_value_source=config['gnn'].get('diffattn_value_source', 'diff'),
+            key_remetrize_config=config['gnn'].get('key_remetrize'),
         ).to(device)
 
     # Get effective input_dim (may differ from config if policy overrides it)
@@ -1508,6 +1521,7 @@ def main():
         phase_token_aux_lambda=config['training'].get('phase_token_aux_lambda', 0.0),
         checkpoint_metric=config['training'].get('checkpoint_metric', 'average_recall@1'),
         recall_k_values=config['training'].get('recall_k_values', [1, 5, 10]),
+        mine_on_refined=config['training'].get('mine_on_refined', False),
     )
 
     # ========================================================================
