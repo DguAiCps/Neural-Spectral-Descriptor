@@ -36,7 +36,7 @@ Run inside nvcr.io/nvidia/pyg:26.01-py3 with the repo at /workspace/...:
 Writes results/latency_memory_bench.json and prints a table.
 """
 from __future__ import annotations
-import copy, json, resource, sys, time
+import copy, json, os, resource, sys, time
 from pathlib import Path
 import numpy as np
 import torch, yaml
@@ -56,16 +56,19 @@ CACHE = REPO / "data/preprocessed_cross_sensor_operating"
 RVEC = REPO / "artifacts/key_remetrize_r.npy"
 CLS = REPO / "artifacts/edge_classifier.pt"
 CKPT = REPO / "checkpoints/800d_4sensor_20260511_161726/best_model.pth"
-OUT = REPO / "results/latency_memory_bench.json"
+OUT = None  # set below once N_COARSE is known
 DATA_ROOTS = {"kitti": "/workspace/data/kitti/dataset", "nclt": "/workspace/data/nclt",
               "mulran": "/workspace/data/mulran"}
 BEV_DIRS = {"kitti": "preprocessed_kitti_bev_layout", "nclt": "preprocessed_nclt_bev_layout",
             "helipr": "preprocessed_helipr_bev_layout", "mulran": "preprocessed_mulran_bev_layout"}
 SEQS = [("kitti", "05", "KITTI_05"), ("kitti", "00", "KITTI_00"),
         ("mulran", "KAIST03", "MulRan_KAIST03"), ("nclt", "2012-01-08", "NCLT_2012-01-08")]
-DTH, SKIP, KEEP_K, N_COARSE = 5.0, 30, 10, 800
+DTH, SKIP, KEEP_K = 5.0, 30, 10
+N_COARSE = int(os.environ.get("NSC_N_COARSE", "800"))  # tab:ksweep timing sweep
 WB, WR = 0.5, 0.0  # deployed grid point
-ENCODE_SAMPLE = 150
+PRIMARY_ONLY = os.environ.get("NSC_PRIMARY_ONLY", "0") == "1"  # tab:ksweep 416D-only row
+OUT = REPO / ("results/latency_memory_bench.json" if N_COARSE == 800 and not PRIMARY_ONLY else f"results/latency_memory_bench_K{N_COARSE}" + ("_primary" if PRIMARY_ONLY else "") + ".json")
+ENCODE_SAMPLE = int(os.environ.get("NSC_ENCODE_SAMPLE", "150"))
 DEVICE = "cuda"
 
 
@@ -354,9 +357,9 @@ def bench_sequence(model, clf, mu, sd, r, rm_cfg, sensor, seq, name,
         t0 = time.perf_counter()
         cand_emb = _topk_cosine(normed, qi, N_COARSE, SKIP)
         t1 = time.perf_counter()
-        cand_rng = _topk_cosine(range_keys, qi, N_COARSE, SKIP)
+        cand_rng = cand_emb[:0] if PRIMARY_ONLY else _topk_cosine(range_keys, qi, N_COARSE, SKIP)
         t2 = time.perf_counter()
-        cand_bev = _topk_cosine(bev_keys, qi, N_COARSE, SKIP)
+        cand_bev = cand_emb[:0] if PRIMARY_ONLY else _topk_cosine(bev_keys, qi, N_COARSE, SKIP)
         t3 = time.perf_counter()
         candidates = np.unique(np.concatenate([cand_emb, cand_rng, cand_bev]))
         t4 = time.perf_counter()

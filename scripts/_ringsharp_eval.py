@@ -103,12 +103,15 @@ def load_model(weight_path, device):
     return model, trans_cnn
 
 
-def compute_seq_features(model, dtype, seq, scan_ids, device, batch, max_frames=None):
+def compute_seq_features(model, trans_cnn, dtype, seq, scan_ids, device, batch,
+                         max_frames=None):
     """Returns global desc (n,160) fp32, specs (n,1,160,160) fp16 cpu,
-    packed occupancy bevs (n, packed) uint8 cpu."""
+    packed occupancy bevs (n, packed) uint8 cpu, and cached trans-branch
+    features bts (n,...) fp16 cpu (official map_bevs_trans precompute; avoids
+    re-encoding [query]+candidates at every rerank call)."""
     loader = make_nsc_loader(dtype, seq, "/workspace/data")
     n = len(scan_ids) if not max_frames else min(max_frames, len(scan_ids))
-    glob, specs, bevs_packed = [], [], []
+    glob, specs, bevs_packed, bts = [], [], [], []
     t0 = time.time()
     for i0 in range(0, n, batch):
         idx = range(i0, min(i0 + batch, n))
@@ -122,13 +125,16 @@ def compute_seq_features(model, dtype, seq, scan_ids, device, batch, max_frames=
             out = model({"pc": bev, "img": None})
         glob.append(out["global"].float().cpu().numpy())
         specs.append(out["spec"].half().cpu())
+        with torch.no_grad():
+            bts.append(trans_cnn(out["bev"]).half().cpu())
         bevs_packed.append(np.packbits(
             (bev.cpu().numpy() > 0).reshape(len(bevs), -1), axis=1))
         if (i0 // batch) % 20 == 0:
             print(f"    [{dtype}_{seq}] {i0+len(bevs)}/{n} "
                   f"({(time.time()-t0):.0f}s)", flush=True)
     del loader
-    return (np.concatenate(glob), torch.cat(specs), np.concatenate(bevs_packed))
+    return (np.concatenate(glob), torch.cat(specs), np.concatenate(bevs_packed),
+            torch.cat(bts))
 
 
 def main():
@@ -156,8 +162,10 @@ def main():
         if args.max_frames:
             scan_ids, poses = scan_ids[:args.max_frames], poses[:args.max_frames]
         print(f"[{dtype}_{seq}] {len(scan_ids)} keyframes")
-        glob, specs, bevs_packed = compute_seq_features(
-            model, dtype, seq, scan_ids, device, args.batch)
+        glob, specs, bevs_packed, bts = compute_seq_features(
+            model, trans_cnn, dtype, seq, scan_ids, device, args.batch)
+        print(f"    [{dtype}_{seq}] trans-feature cache: "
+              f"{bts.element_size()*bts.nelement()/1e9:.2f} GB", flush=True)
         n = len(glob)
         n_coarse = n if args.n_coarse < 0 else min(args.n_coarse, n)
         shape_bev = (NSC_Z, NSC_Y, NSC_X)
@@ -184,9 +192,7 @@ def main():
             m = min(args.n_trans, len(cand))
             top = order[:m]
             with torch.no_grad():
-                occ = unpack_bev(np.concatenate(([qi], cand[top])))
-                feat128 = model({"pc": occ, "img": None})["bev"]
-                bt = trans_cnn(feat128)
+                bt = bts[np.concatenate(([qi], cand[top]))].to(device).float()
                 qbt, cbt = bt[:1], bt[1:]
                 ang = torch.from_numpy(angles[top]).float().to(device)
                 # Official semantics: single query (B=1) rotated by the m

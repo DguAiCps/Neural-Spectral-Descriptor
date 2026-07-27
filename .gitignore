@@ -26,7 +26,7 @@ docs/
 !artifacts/edge_classifier.pt
 
 # Data
-data/
+/data/
 *.bin
 *.h5
 *.hdf5

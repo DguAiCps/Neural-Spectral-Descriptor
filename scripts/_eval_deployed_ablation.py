@@ -57,7 +57,14 @@ SEQUENCES = [
 EXPECTED_QC = {
     "kitti/00": 632, "kitti/05": 377, "kitti/08": 235,
     "nclt/2012-01-08": 1834, "nclt/2013-01-10": 181, "helipr/Town01": 1586,
+    "mulran/DCC03": 2344, "mulran/KAIST03": 2909, "mulran/Riverside03": 2796,
 }
+
+# tab:transfer evaluates the full 9-sequence validation set; the MulRan
+# sequences are selectable via --sequences and NOT part of the 6-seq default.
+ALL_SEQUENCES = SEQUENCES + [
+    ("mulran", "DCC03"), ("mulran", "KAIST03"), ("mulran", "Riverside03"),
+]
 
 VARIANTS = {
     "baseline": {
@@ -94,6 +101,49 @@ VARIANTS = {
         "label": "mining on refined descriptors",
         "config": "configs/_abl_deployed_v5.yaml",
         "checkpoint": "checkpoints/abl_deployed_v5/best_model.pth",
+    },
+    # tab:transfer single-sensor rows (train = one sensor family, seed 1)
+    "t_kitti": {
+        "label": "transfer: HDL-64E only (KITTI 01/02/06/07)",
+        "config": "configs/_transfer_kitti.yaml",
+        "checkpoint": "checkpoints/transfer_kitti/best_model.pth",
+    },
+    "t_nclt": {
+        "label": "transfer: HDL-32E only (NCLT 5 train seqs)",
+        "config": "configs/_transfer_nclt.yaml",
+        "checkpoint": "checkpoints/transfer_nclt/best_model.pth",
+    },
+    "t_helipr": {
+        "label": "transfer: VLP-16 only (HeLiPR 6 train seqs)",
+        "config": "configs/_transfer_helipr.yaml",
+        "checkpoint": "checkpoints/transfer_helipr/best_model.pth",
+    },
+    "t_mulran": {
+        "label": "transfer: OS1-64 only (MulRan 9 train seqs)",
+        "config": "configs/_transfer_mulran.yaml",
+        "checkpoint": "checkpoints/transfer_mulran/best_model.pth",
+    },
+    # tab:transfer LOSO rows (train + early-stop val on the OTHER three
+    # sensor families; held-out sensor untouched before final eval)
+    "lo_kitti": {
+        "label": "LOSO: w/o HDL-64E (train NCLT+HeLiPR+MulRan)",
+        "config": "configs/_loso_no_kitti.yaml",
+        "checkpoint": "checkpoints/loso_no_kitti/best_model.pth",
+    },
+    "lo_nclt": {
+        "label": "LOSO: w/o HDL-32E (train KITTI+HeLiPR+MulRan)",
+        "config": "configs/_loso_no_nclt.yaml",
+        "checkpoint": "checkpoints/loso_no_nclt/best_model.pth",
+    },
+    "lo_helipr": {
+        "label": "LOSO: w/o VLP-16 (train KITTI+NCLT+MulRan)",
+        "config": "configs/_loso_no_helipr.yaml",
+        "checkpoint": "checkpoints/loso_no_helipr/best_model.pth",
+    },
+    "lo_mulran": {
+        "label": "LOSO: w/o OS1-64 (train KITTI+NCLT+HeLiPR)",
+        "config": "configs/_loso_no_mulran.yaml",
+        "checkpoint": "checkpoints/loso_no_mulran/best_model.pth",
     },
 }
 
@@ -199,7 +249,7 @@ def main() -> None:
     sequences = SEQUENCES
     if args.sequences:
         wanted = set(args.sequences)
-        sequences = [(s, q) for s, q in SEQUENCES if f"{s}/{q}" in wanted]
+        sequences = [(s, q) for s, q in ALL_SEQUENCES if f"{s}/{q}" in wanted]
         missing = wanted - {f"{s}/{q}" for s, q in sequences}
         if missing:
             ap.error(f"unknown sequences: {sorted(missing)}")
