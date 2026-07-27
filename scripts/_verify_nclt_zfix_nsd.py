@@ -35,8 +35,7 @@ NCLT_ROOT = Path("/data/nclt")
 OUT = REPO / "results/_alias_source"
 POS_M, SKIP = 5.0, 30
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-NCLT_DT = np.dtype([("x", "<u2"), ("y", "<u2"), ("z", "<u2"),
-                    ("intensity", "u1"), ("padding", "u1"), ("extra", "<u4")])
+NCLT_DT = np.dtype([('x', '<u2'), ('y', '<u2'), ('z', '<u2'), ('intensity', 'u1'), ('laser', 'u1')])  # official 8-byte NCLT hit
 
 
 def load_scan(path):

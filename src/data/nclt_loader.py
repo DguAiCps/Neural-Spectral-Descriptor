@@ -211,11 +211,10 @@ class NCLTLoader:
         """
         Load a single point cloud from NCLT bin file (vectorized)
 
-        NCLT actual format (12 bytes per point):
-        - x, y, z: uint16 (stored as cm, centered at 32767)
+        Official NCLT velodyne_sync hit format (8 bytes per point):
+        - x, y, z: uint16 (value * 0.005 - 100 -> meters)
         - intensity: uint8
-        - padding: uint8
-        - extra: uint32 (timestamp or ring)
+        - laser id: uint8 (0..31 for HDL-32E)
 
         Args:
             idx: Frame index
@@ -226,14 +225,17 @@ class NCLTLoader:
         bin_file = self.frame_files[idx]
 
         try:
-            # Define structured dtype for NCLT format (12 bytes per point)
+            
+            # Official NCLT velodyne_sync hit format: 8 bytes per point
+            # (x, y, z as uint16, intensity uint8, laser id uint8).
+            # Verified empirically: file sizes are multiples of 8 (not 12)
+            # and the laser field is <= 31 for 100% of hits (HDL-32E).
             nclt_dtype = np.dtype([
-                ('x', '<u2'),      # uint16 little-endian
+                ('x', '<u2'),
                 ('y', '<u2'),
                 ('z', '<u2'),
-                ('intensity', 'u1'),  # uint8
-                ('padding', 'u1'),
-                ('extra', '<u4')   # uint32
+                ('intensity', 'u1'),
+                ('laser', 'u1')
             ])
 
             # Read entire file at once with numpy (vectorized)

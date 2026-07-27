@@ -144,8 +144,18 @@ def main():
         z = np.load(CACHE / fn)
         mags = z["fft_magnitudes"].astype(np.float64)
         pos = z["poses"][:, :3, 3]
+        _desc = z["descriptors"].astype(np.float64)
+        if _desc.shape[1] != 288:
+            mus0, sds0 = [], []
+            for _b in range(len(OCTAVE) - 1):
+                _seg = mags[:, :, OCTAVE[_b]:OCTAVE[_b + 1]]
+                _mu = _seg.mean(axis=2)
+                mus0.append(_mu)
+                sds0.append(np.sqrt(((_seg - _mu[:, :, None]) ** 2).mean(axis=2) + 1e-8))
+            _desc = np.concatenate([np.stack(mus0, 2).reshape(len(mags), -1),
+                                    np.stack(sds0, 2).reshape(len(mags), -1)], axis=1)
         reps = {
-            "bin288": l2(z["descriptors"].astype(np.float64)),
+            "bin288": l2(_desc),
             "full2896": l2(mags.reshape(len(mags), -1)),
             "mean144": octave_stats(mags, with_std=False),
         }
@@ -158,7 +168,10 @@ def main():
             sds.append(np.sqrt(((seg - mu[:, :, None]) ** 2).mean(axis=2) + 1e-8))
         rec = np.concatenate([np.stack(mus, 2).reshape(len(mags), -1),
                               np.stack(sds, 2).reshape(len(mags), -1)], axis=1)
-        recon_cos = float(np.abs(rec - z["descriptors"]).max())  # max abs diff, ~1e-4
+        if z["descriptors"].shape[1] == 288:
+            recon_cos = float(np.abs(rec - z["descriptors"]).max())  # max abs diff, ~1e-4
+        else:
+            recon_cos = -1.0  # cache stores a non-288D descriptor; bin288 was reconstructed
 
         d416 = DUMP416 / f"{seq.replace('/', '_')}.npz"
         if d416.exists():

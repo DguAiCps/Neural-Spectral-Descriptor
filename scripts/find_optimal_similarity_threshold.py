@@ -48,10 +48,7 @@ SENSOR_CONFIGS = {
 # ── Point cloud loaders ────────────────────────────────────
 def load_nclt_bin(filepath):
     """Load NCLT bin → (N, 4) [x, y, z, intensity]"""
-    nclt_dtype = np.dtype([
-        ('x', '<u2'), ('y', '<u2'), ('z', '<u2'),
-        ('intensity', 'u1'), ('padding', 'u1'), ('extra', '<u4')
-    ])
+    nclt_dtype = np.dtype([('x', '<u2'), ('y', '<u2'), ('z', '<u2'), ('intensity', 'u1'), ('laser', 'u1')])  # official 8-byte NCLT hit
     raw = np.fromfile(filepath, dtype=nclt_dtype)
     x = raw['x'].astype(np.float64) * 0.005 - 100.0
     y = raw['y'].astype(np.float64) * 0.005 - 100.0

@@ -1,0 +1,3 @@
+method,short_name,dim,dataset,split,recall_at_1,recall_at_5,recall_at_10,n_queries,encoding_time_ms
+RING++,ring++,14400,NCLT_2012-01-08,val,0.8119,0.9024,0.9302,1834,2.03
+RING++,ring++,14400,NCLT_2013-01-10,val,0.5912,0.7845,0.8564,181,1.78

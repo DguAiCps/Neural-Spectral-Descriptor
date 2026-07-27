@@ -25,8 +25,7 @@ sys.path.insert(0, str(REPO / "src"))
 CACHE = REPO / "data/preprocessed_cross_sensor_operating"
 NCLT_ROOT = Path("/data/nclt")
 OUT = REPO / "results/_alias_source"
-NCLT_DT = np.dtype([("x", "<u2"), ("y", "<u2"), ("z", "<u2"),
-                    ("intensity", "u1"), ("padding", "u1"), ("extra", "<u4")])
+NCLT_DT = np.dtype([('x', '<u2'), ('y', '<u2'), ('z', '<u2'), ('intensity', 'u1'), ('laser', 'u1')])  # official 8-byte NCLT hit
 
 
 def load_scan(path, flip):

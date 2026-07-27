@@ -1,0 +1,34 @@
+{
+  "method": "SeqOT (trained on our split)",
+  "descriptor_dim": 256,
+  "protocol": "intra-sequence R@K, revisit <5m, skip>30 keyframes",
+  "seqot_checkpoint": "_external/seqot_runs/full/seqot_latest.pth.tar",
+  "gem_checkpoint": "_external/seqot_runs/full/gem_latest.pth.tar",
+  "max_frames": 0,
+  "per_sequence": {
+    "nclt/2012-01-08": {
+      "recalls": {
+        "1": 0.4318429661941112,
+        "5": 0.5087241003271538,
+        "10": 0.5512540894220284
+      },
+      "n_queries": 1834,
+      "n_frames": 7465
+    },
+    "nclt/2013-01-10": {
+      "recalls": {
+        "1": 0.2596685082872928,
+        "5": 0.3425414364640884,
+        "10": 0.39226519337016574
+      },
+      "n_queries": 181,
+      "n_frames": 1281
+    }
+  },
+  "weighted_mean": {
+    "1": 0.4163771712158809,
+    "5": 0.49379652605459057,
+    "10": 0.5369727047146402
+  },
+  "total_queries": 2015
+}

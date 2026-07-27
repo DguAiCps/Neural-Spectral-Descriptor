@@ -13,8 +13,7 @@ def _write_nclt_scan(path: Path) -> None:
             ("y", "<u2"),
             ("z", "<u2"),
             ("intensity", "u1"),
-            ("padding", "u1"),
-            ("extra", "<u4"),
+            ("laser", "u1"),
         ]
     )
     raw = np.zeros(3, dtype=dtype)

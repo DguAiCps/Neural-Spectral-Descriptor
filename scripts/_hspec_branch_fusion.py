@@ -23,8 +23,11 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 from _height_candidate_fusion import (
     JOBS, WEIGHTS, CACHE_OUT, RESULT_OUT, bin288, l2,
-    make_model, nsd_embedding, column_align_bank, evaluate,
+    make_model, nsd_embedding, column_align_bank, evaluate, height_cache,
 )
+from run_kitti_operating_point import _make_encoder
+
+_ENC = []
 
 VAL_TAGS = ["K00", "K05", "K08", "N12", "N13", "TOWN", "DCC", "KAI", "RIV"]
 TRAIN_TAGS = ["K01_TR", "K02_TR", "K06_TR", "K07_TR", "N0511_TR", "N0804_TR"]
@@ -55,6 +58,8 @@ def main():
     args = ap.parse_args()
     RESULT_OUT.mkdir(parents=True, exist_ok=True)
     cfg, model, clf, clf_blob = make_model(args.device, args.seed)
+    if not _ENC:
+        _ENC.append(_make_encoder(cfg, args.device))
     suffix = "" if args.seed == 1 else f"_seed{args.seed}"
     result_path = RESULT_OUT / f"hspec_branch_fusion{suffix}.json"
     report = json.loads(result_path.read_text()) if result_path.exists() else {}
@@ -68,7 +73,10 @@ def main():
         print(f"\n=== {tag} ===", flush=True)
         cache = np.load(REPO / cache_path)
         d288 = bin288(cache["fft_magnitudes"].astype(np.float32))
-        hc = np.load(CACHE_OUT / f"{tag}_height120.npz")
+        hc_path = CACHE_OUT / f"{tag}_height120.npz"
+        hc = np.load(hc_path) if hc_path.exists() else None
+        if hc is None or not np.array_equal(hc["scan_ids"], cache["scan_ids"]):
+            hc = height_cache(tag, sensor, sequence, cache, _ENC[0])
         raw_height = hc["raw_height"].astype(np.float32)
         layouts = hc["nsd_layout"].astype(np.float32)
         nsd = nsd_embedding(cache, sensor, d288, layouts,

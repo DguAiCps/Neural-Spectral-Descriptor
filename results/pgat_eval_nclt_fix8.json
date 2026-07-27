@@ -1,0 +1,32 @@
+{
+  "checkpoint": "/rise/RISE1/workspace/impl/NSD-paper/_external/pgat_runs/full/attentional_graph.pt",
+  "protocol": {
+    "distance_threshold": 5.0,
+    "skip_frames": 30,
+    "window_m": 50.0,
+    "max_nodes": 80,
+    "embedding": "PoseGAT (g,g) stream-0 post output_fc + L2, non-overlapping tiles"
+  },
+  "per_sequence": {
+    "nclt_2012-01-08": {
+      "R@1": 0.03925845147219193,
+      "R@5": 0.04416575790621592,
+      "R@10": 0.05125408942202835,
+      "n_queries": 1834
+    },
+    "nclt_2013-01-10": {
+      "R@1": 0.0,
+      "R@5": 0.0,
+      "R@10": 0.027624309392265192,
+      "n_queries": 181
+    }
+  },
+  "mean": {
+    "R^q@1": 0.03573200992555831,
+    "R^s@1": 0.019629225736095966,
+    "R^q@5": 0.0401985111662531,
+    "R^s@5": 0.02208287895310796,
+    "R^q@10": 0.04913151364764268,
+    "R^s@10": 0.03943919940714677
+  }
+}

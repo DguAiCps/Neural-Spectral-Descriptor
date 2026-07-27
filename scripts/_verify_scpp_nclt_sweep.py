@@ -48,8 +48,7 @@ GRID = [
 def load_nclt_scan(path):
     """Release-convention NCLT parsing (12 bytes/point, no z flip):
     matches data/nclt_loader.py exactly."""
-    nclt_dtype = np.dtype([("x", "<u2"), ("y", "<u2"), ("z", "<u2"),
-                           ("intensity", "u1"), ("padding", "u1"), ("extra", "<u4")])
+    nclt_dtype = np.dtype([('x', '<u2'), ('y', '<u2'), ('z', '<u2'), ('intensity', 'u1'), ('laser', 'u1')])  # official 8-byte NCLT hit
     raw = np.fromfile(path, dtype=nclt_dtype)
     x = raw["x"].astype(np.float32) * 0.005 - 100.0
     y = raw["y"].astype(np.float32) * 0.005 - 100.0
