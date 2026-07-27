@@ -158,6 +158,11 @@ def main():
             "bin288": l2(_desc),
             "full2896": l2(mags.reshape(len(mags), -1)),
             "mean144": octave_stats(mags, with_std=False),
+            "trunc352": l2(mags[:, :, :22].reshape(len(mags), -1)),
+            "trunc1440": l2(mags[:, :, :90].reshape(len(mags), -1)),
+            "trunc720": l2(mags[:, :, :45].reshape(len(mags), -1)),
+            "trunc176": l2(mags[:, :, :11].reshape(len(mags), -1)),
+            "trunc80": l2(mags[:, :, :5].reshape(len(mags), -1)),
         }
         # recon sanity: raw (un-normalized) mu/sigma must match the cached key
         mus, sds = [], []
