@@ -1,0 +1,18 @@
+{
+  "NSD (416/128, 800f)": {
+    "n_stored_keyframes": 5766,
+    "n_queries": 400,
+    "matching_ms_mean": 1.662,
+    "matching_ms_median": 1.087,
+    "matching_ms_p95": 5.226,
+    "note": "matching latency from precomputed query keys; two exact GPU similarity scans + union fusion"
+  },
+  "NSD-H (416/240, 1024f)": {
+    "n_stored_keyframes": 5766,
+    "n_queries": 400,
+    "matching_ms_mean": 5.126,
+    "matching_ms_median": 3.58,
+    "matching_ms_p95": 13.928,
+    "note": "matching latency from precomputed query keys; two exact GPU similarity scans + union fusion"
+  }
+}
