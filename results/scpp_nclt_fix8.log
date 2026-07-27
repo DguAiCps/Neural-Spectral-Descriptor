@@ -1,0 +1,18 @@
+Loaded 28127 matched poses (from 835468 ground truth)
+[N12] sc 0/7467
+[N12] sc 1000/7467
+[N12] sc 2000/7467
+[N12] sc 3000/7467
+[N12] sc 4000/7467
+[N12] sc 5000/7467
+[N12] sc 6000/7467
+[N12] sc 7000/7467
+[N12] q 500/1834
+[N12] q 1000/1834
+[N12] q 1500/1834
+N12: q=1834 scpp_fixed_R@1=0.9149
+Loaded 5120 matched poses (from 150971 ground truth)
+[N13] sc 0/1281
+[N13] sc 1000/1281
+N13: q=181 scpp_fixed_R@1=0.9558
+SCPP_FIX8_DONE

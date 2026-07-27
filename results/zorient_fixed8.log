@@ -1,0 +1,5 @@
+Loaded 5120 matched poses (from 150971 ground truth)
+2013-01-10: loader-z(=-raw) R@1=0.8564  flipped(+raw) R@1=0.2210  med_z_loader=0.23
+Loaded 28127 matched poses (from 835468 ground truth)
+2012-01-08: loader-z(=-raw) R@1=0.8321  flipped(+raw) R@1=0.1647  med_z_loader=0.73
+ZORIENT_FIXED_DONE
