@@ -1,0 +1,26 @@
+{
+  "nclt_2012-01-08": {
+    "n_queries": 1834,
+    "recall@1": 0.5163576881134133,
+    "recall@5": 0.836423118865867,
+    "recall@10": 0.9296619411123228
+  },
+  "nclt_2013-01-10": {
+    "n_queries": 181,
+    "recall@1": 0.3867403314917127,
+    "recall@5": 0.8066298342541437,
+    "recall@10": 0.9392265193370166
+  },
+  "_query_weighted_mean": {
+    "n_queries": 2015,
+    "recall@1": 0.5047146401985112,
+    "recall@5": 0.8337468982630273,
+    "recall@10": 0.9305210918114144
+  },
+  "_meta": {
+    "weight": "_external/RINGSharp/tools/results/weights/ring_sharp_l_nsc_full/model_ring_sharp_l_nsc_20260725_0743_final.pth",
+    "n_coarse": 200,
+    "n_trans": 20,
+    "protocol": "revisit<5m, skip 30 frames, intra-sequence"
+  }
+}

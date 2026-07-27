@@ -1,0 +1,91 @@
+{
+  "official_substitution_rule": "_external/RINGSharp/glnet/utils/data_utils/point_clouds.py L85-87: if torch.isnan(pc_feats).any(): pc_feats = torch.where(torch.isnan(pc_feats), torch.tensor(0.0), pc_feats)  [upstream, unmodified; executed by scripts/_ringpp_eval.py via generate_feats]",
+  "pointfeat_2012-01-08": {
+    "n_scans": 7465,
+    "total_elements": 2384513100,
+    "total_nan_elements": 6923566,
+    "nan_fraction": 0.002903555447021868,
+    "scans_with_any_nan": 7441,
+    "scans_with_any_nan_frac": 0.9967849966510381,
+    "per_scan_replacement_rate": {
+      "mean": 0.003141307106771184,
+      "median": 0.0029265967040604736,
+      "p99": 0.009173971758087625,
+      "max": 0.013376696285111407
+    }
+  },
+  "pointfeat_2013-01-10": {
+    "n_scans": 1281,
+    "total_elements": 357592992,
+    "total_nan_elements": 1101090,
+    "nan_fraction": 0.0030791710817420046,
+    "scans_with_any_nan": 1277,
+    "scans_with_any_nan_frac": 0.9968774395003903,
+    "per_scan_replacement_rate": {
+      "mean": 0.0033216080894528303,
+      "median": 0.0028064355925374114,
+      "p99": 0.010896025383736479,
+      "max": 0.013176514255225369
+    }
+  },
+  "bev_2012-01-08": {
+    "shape": [
+      7465,
+      6,
+      120,
+      120
+    ],
+    "nan_elements": 0,
+    "inf_elements": 0
+  },
+  "spec_2012-01-08": {
+    "spec_nan_elements": 0,
+    "desc_norm": {
+      "mean": 3253.008056640625,
+      "std": 1541.298828125,
+      "min": 67.9739990234375,
+      "max": 7554.02099609375
+    },
+    "desc_norm_scans_with_replacement": {
+      "n": 7441,
+      "mean": 3260.529052734375,
+      "std": 1536.4736328125
+    },
+    "desc_norm_scans_without_replacement": {
+      "n": 24,
+      "mean": 921.220703125,
+      "std": 1234.986083984375
+    },
+    "note": "without the L85-87 substitution, every scan with any NaN feature element would propagate NaN through voxelize->radon->FFT, making its descriptor norm NaN"
+  },
+  "bev_2013-01-10": {
+    "shape": [
+      1281,
+      6,
+      120,
+      120
+    ],
+    "nan_elements": 0,
+    "inf_elements": 0
+  },
+  "spec_2013-01-10": {
+    "spec_nan_elements": 0,
+    "desc_norm": {
+      "mean": 3444.617919921875,
+      "std": 1601.9503173828125,
+      "min": 180.81495666503906,
+      "max": 7355.3603515625
+    },
+    "desc_norm_scans_with_replacement": {
+      "n": 1277,
+      "mean": 3449.98193359375,
+      "std": 1599.6260986328125
+    },
+    "desc_norm_scans_without_replacement": {
+      "n": 4,
+      "mean": 1732.098876953125,
+      "std": 1414.1976318359375
+    },
+    "note": "without the L85-87 substitution, every scan with any NaN feature element would propagate NaN through voxelize->radon->FFT, making its descriptor norm NaN"
+  }
+}
