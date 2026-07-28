@@ -1,31 +1,40 @@
 # Neural Spectral Descriptor 800D Release
 
-This branch contains the NSD 800D paper code plus appendix ablations. The
+This branch contains the NSD paper code plus appendix ablations. The
 current source of truth is:
 
-1. `RELEASE_800D.md` — commands for students continuing the experiments.
-2. `EXPERIMENT_HANDOFF.md` — full experiment history and interpretation.
-3. `docs/paper/body_aaai27/aaai2027_body.tex` — paper text and reported numbers.
-4. `RELEASE_CHECKLIST.md` — final checks before sharing the code.
+1. `CLAUDE.md` — current paper-main spec (NSD + NSD-H operating points).
+2. `docs/paper/body_v2.0/aaai2027_body.tex` — paper text and reported numbers.
+3. `EXPERIMENT_HANDOFF.md` — full experiment history and interpretation.
+4. `RELEASE_800D.md` — base 800D runbook for students continuing the experiments.
+5. `RELEASE_CHECKLIST.md` — final checks before sharing the code.
 
 The old 544D/672D encoder-bandwidth baseline is still present in configs and
 results for ablation context, but it is not the current paper-main path.
 
-## Current 800D State
+## Current State (two operating points)
+
+The current paper (AAAI-27) reports two operating points that share one architecture
+and differ only in the auxiliary projection of the retrieval-time complex spectrum:
 
 ```text
-288D no_interdiff magnitude key
-+ 128D fixed-alpha gated DiffAttnConv context
-+ 384D phase-alignment sketch
-= 800D stored state
+416D retrieval key = 288D no_interdiff magnitude key (re-metrized)
+                   + 128D fixed-alpha gated DiffAttnConv context
+stored per keyframe = 416D key + complex spectrum
+  NSD   : + cylindrical 128 + BEV 256           =   800 floats
+  NSD-H : + cylindrical 128 + height-polar 480   = 1,024 floats
 ```
 
-Reported configuration (the same architecture applies to all four sensors):
+Reported numbers (3-seed, 9 held-out sequences across KITTI/NCLT/HeLiPR/MulRan):
 
-| Configuration | Phase sketch | Reranker | Scope |
-| --- | --- | --- | --- |
-| NSD (Table 1) | cylindrical+BEV 384D | closed-form cyclic-shift cosine (Eq. 6) | 9 validation sequences across KITTI/NCLT/HeLiPR/MulRan |
-| Appendix ablation (`app:physics3`) | physics3 384D | closed-form | not paper-main |
+| Operating point | Stored | R̄q | R̄s | σ_cross | R_min |
+| --- | --- | --- | --- | --- | --- |
+| NSD | 800 | 0.888 | 0.896 | 0.048 | 0.813 |
+| NSD-H | 1,024 | 0.887 | 0.914 | 0.082 | 0.770 |
+
+The complex spectrum is used only at retrieval time: its magnitude is a second cosine index, and
+its coefficients are cyclically aligned over the candidate union. `physics3` height encoding is an
+appendix ablation, not paper-main.
 
 ## Quick Start
 

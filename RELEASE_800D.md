@@ -2,10 +2,17 @@
 
 Date: 2026-05-10
 
-This file is the student-facing entry point for continuing the NeurIPS 2026
+> **Update 2026-07-28:** the current paper (AAAI-27, branch `feat/pbev-stored-spectrum`) reports
+> **two operating points** — NSD (800-float, R̄q 0.888) and NSD-H (1,024-float, R̄s 0.914) — that add a
+> retrieval-time reuse of the stored complex spectrum on top of the configuration in this runbook.
+> See `CLAUDE.md` and `docs/paper/body_v2.0/aaai2027_body.tex` for the current spec and eval entry points
+> (`scripts/_pbev_branch_fusion.py`, `scripts/_hspec_branch_fusion.py`). The runbook below still describes
+> the shared 800-float base configuration correctly.
+
+This file is the student-facing entry point for continuing the
 800D NSD experiments. Older configs and archived result files describe the
 historical 544D/672D baseline; use this runbook and `EXPERIMENT_HANDOFF.md`
-for the current paper state.
+for the base 800D paper state.
 
 ## 1. Canonical configuration
 

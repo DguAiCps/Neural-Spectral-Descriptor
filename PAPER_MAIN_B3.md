@@ -1,5 +1,14 @@
 # PAPER MAIN (FROZEN): 800D + fixed re-metrization + learned edge selection (B3)
 
+> **SUPERSEDED 2026-07-28 — this file describes the earlier single-800D freeze (R̄q 0.785/0.796), NOT the current paper-main.**
+> Current paper-main is **two operating points** on branch `feat/pbev-stored-spectrum`, which reuse the stored complex
+> spectrum at retrieval time (a second magnitude index + cyclic alignment) on top of the A+B3 pipeline below:
+> **NSD** 800 floats (R̄q 0.888 / R̄s 0.896 / σ 0.048 / R_min 0.813) and **NSD-H** 1,024 floats
+> (R̄q 0.887 / R̄s 0.914 / σ 0.082 / R_min 0.770). Authoritative: `docs/paper/body_v2.0/aaai2027_body.tex` and the
+> committed `results/height_sota/{pbev,hspec}_branch_fusion*.json`; eval via `scripts/_pbev_branch_fusion.py`,
+> `scripts/_hspec_branch_fusion.py`, `scripts/_final_fix8_agg.py`. The A (re-metrization) and B3 (edge-selection)
+> pipeline detail below remains accurate and is the shared front end of both operating points.
+
 > **PROTOCOL UPDATE 2026-07-20 (user-approved):** the paper headline now uses the
 > **train-calibrated per-sensor fusion weights** (KITTI (w_b,w_r)=(0.5,0), phase off elsewhere;
 > calibrated on the 23 cached train sequences, seed-1 embeddings, applied to all 3 seeds):

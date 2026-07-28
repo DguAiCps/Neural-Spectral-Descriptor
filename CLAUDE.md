@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repo Is
 
-NeurIPS 2026 release code for the Neural Spectral Descriptor (NSD), a LiDAR place-recognition descriptor. The frozen reported state is **800D**: `288D magnitude key + 128D gated-GAT context + 384D phase-alignment sketch`. The repository is code-only and ships no datasets or checkpoints.
+Release code for the Neural Spectral Descriptor (NSD), a LiDAR place-recognition descriptor. The current paper (AAAI-27, `docs/paper/body_v2.0/`) reports **two operating points that share one architecture**: **NSD** (800-float stored state) and **NSD-H** (1,024-float), differing only in the auxiliary projection of the retrieval-time complex spectrum. Both build a 416D retrieval key (`288D magnitude key + 128D gated context`) and store a complex spectrum used only at retrieval time. The repository is code-only and ships no datasets or checkpoints.
 
 Authoritative docs (read in this order before touching anything):
 1. [PAPER_MAIN_B3.md](PAPER_MAIN_B3.md) — **the frozen AAAI-27 paper-main spec** (pipeline, constants, 3-seed numbers, protocol disclosures, repro commands, negative-results ledger). If you are writing or editing the paper, start here.
@@ -17,15 +17,23 @@ Authoritative docs (read in this order before touching anything):
 
 ## Paper-Main Configuration — uniform across all datasets
 
-**Frozen 2026-07-09 (branch `feat/remetrize-twopass`)**: paper main = the three frozen 800D checkpoints + fixed key re-metrization (A) + classifier-selected similarity edges (B3) + raw-scale phase rerank. 3-seed full-pipeline result: R̄q 0.796 / R̄s 0.767 / σ_cross 0.201 / R_min 0.467. Zero retraining; storage stays 800D. Full spec in [PAPER_MAIN_B3.md](PAPER_MAIN_B3.md).
+**Current paper-main (branch `feat/pbev-stored-spectrum`; supersedes the 2026-07-09 `feat/remetrize-twopass` freeze).** Paper main is now **two operating points** on the same three frozen refiner checkpoints + fixed key re-metrization (A) + two-pass classifier-selected edges (B3), extended with a retrieval-time reuse of the stored complex spectrum (a second magnitude index + cyclic alignment). Zero retraining.
 
-There is exactly one deployed NSD architecture; it applies identically to KITTI, NCLT, HeLiPR, and MulRan.
+- **NSD** — 800-float state, auxiliary BEV spectrum. 3-seed: R̄q 0.888 / R̄s 0.896 / σ_cross 0.048 / R_min 0.813.
+- **NSD-H** — 1,024-float state, auxiliary height-polar spectrum. 3-seed: R̄q 0.887 / R̄s 0.914 / σ_cross 0.082 / R_min 0.770.
 
-| Key metric | Edge selection | Phase sketch | Reranker | Scope |
-| --- | --- | --- | --- | --- |
-| 416D `[normalize(r⊙d); g·ĉ]`, r = `artifacts/key_remetrize_r.npy` | two-pass: top-30 candidates → `artifacts/edge_classifier.pt` → top-10 edges | cylindrical+BEV 384D (`range 16×4×2 + BEV 16×8×2`) | closed-form cyclic-shift cosine (Eq. 6), `fusion_norm="raw"` | KITTI/NCLT/HeLiPR/MulRan (all four sensors) |
+Numbers verified 2026-07-28 against committed `results/height_sota/{pbev,hspec}_branch_fusion*.json`. The authoritative spec is the paper `docs/paper/body_v2.0/aaai2027_body.tex`. **[PAPER_MAIN_B3.md](PAPER_MAIN_B3.md) and [RELEASE_800D.md](RELEASE_800D.md) predate this and describe only the earlier single-800D freeze (R̄q 0.785/0.796, no NSD-H)** — their key/edge-stage pipeline detail is still valid, but do not trust their headline numbers.
 
-Paper-main eval entry points: [scripts/run_b3_rerank.py](scripts/run_b3_rerank.py) (main numbers), [scripts/run_remetrize_twopass_eval.py](scripts/run_remetrize_twopass_eval.py) + [scripts/summarize_remetrize_twopass.py](scripts/summarize_remetrize_twopass.py) (ablation ladder), [scripts/build_and_train_edge_classifier.py](scripts/build_and_train_edge_classifier.py) (classifier rebuild).
+One deployed architecture, two storage/accuracy operating points; it applies identically to KITTI, NCLT, HeLiPR, and MulRan.
+
+| Stage | Spec |
+| --- | --- |
+| retrieval key | 416D `[normalize(ω⊙d); g·ĉ]`, ω = `artifacts/key_remetrize_r.npy` |
+| edge selection | two-pass: top-30 candidates → `artifacts/edge_classifier.pt` → top-10 edges |
+| stored complex spectrum | shared cylindrical `16×4×2`=128; NSD adds BEV `16×8×2`=256 (→ 800), NSD-H adds height-polar `20×12×2`=480 (→ 1,024) |
+| retrieval-time matching | two top-100 cosine indexes (key + variant magnitude) → union → per-query min–max 4-channel fusion + cyclic alignment; tuples NSD `(0.5,1,0,0.5)`, NSD-H `(1,1,1,2)` |
+
+Paper-main eval entry points: [scripts/_pbev_branch_fusion.py](scripts/_pbev_branch_fusion.py) (NSD), [scripts/_hspec_branch_fusion.py](scripts/_hspec_branch_fusion.py) (NSD-H; deployed variant is `hspec12`, not the 784-float `hspec6` control), [scripts/_final_fix8_agg.py](scripts/_final_fix8_agg.py) (fusion-tuple selection + 3-seed aggregation). Upstream B3 stages: [scripts/run_b3_rerank.py](scripts/run_b3_rerank.py), [scripts/build_and_train_edge_classifier.py](scripts/build_and_train_edge_classifier.py) (classifier rebuild).
 
 The following are **appendix ablations / negative results only** — never use them as the paper-main architecture:
 - `gnn.sensor_gate.enabled=true`
@@ -117,7 +125,7 @@ Module roles (all live under [src/](src/), imported as top-level packages becaus
 - [src/retrieval/](src/retrieval/) — `two_stage_retrieval.py` does coarse (FAISS over the 416D key) + fine (geometric verification). `wasserstein.py` and `geometric_verification.py` support fine-stage scoring.
 - [src/utils/cyclic_shift_distance.py](src/utils/cyclic_shift_distance.py) — the closed-form cyclic-shift cosine reranker used by the four-sensor row.
 
-The "800D stored state" is conceptual: 288D magnitude + 128D GAT context (416D retrieval key written to the database) **plus** 384D phase sketch (stored and used during rerank). The retrieval key alone is 416D; phase contributes only at the cyclic-shift reranker stage.
+The stored state is conceptual: 288D magnitude + 128D gated context (416D retrieval key written to the database) **plus** the complex spectrum (stored and used only at retrieval time). NSD stores a 384D spectrum (cyl 128 + BEV 256) → 800 floats; NSD-H stores 608D (cyl 128 + height-polar 480) → 1,024 floats. The retrieval key alone is 416D; the spectrum contributes at retrieval time as a second magnitude index and via cyclic alignment.
 
 ## Config Layout
 
