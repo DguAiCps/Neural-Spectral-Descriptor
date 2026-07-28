@@ -95,3 +95,6 @@ _ablation/results/ablation_no_interdiff_gate_seed42/*
 
 # External baseline repos + generated data (P-GAT, SeqOT)
 _external/
+
+# Local agent guidelines (not part of the release)
+AGENTS.md
