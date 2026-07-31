@@ -140,7 +140,7 @@ def main():
         print("  macro: " + " ".join(f"{s}={x}" for s, x in summ["macro"].items()))
         for k in QC:
             print(f"    {k:<20} {per_seq[k]:.3f}")
-    out = Path("/tmp/claude-1000/-home-pkm-Neural-Spectral-Codec/48567922-2268-4f1d-a4bf-3858c8fc4564/scratchpad/metric_probe_416.json")
+    out = Path("results/metric_probe_416.json")
     out.write_text(json.dumps(report, indent=2))
     print("\nWROTE", out)
 

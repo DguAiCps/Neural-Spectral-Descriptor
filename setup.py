@@ -6,12 +6,11 @@ with open("README.md", "r", encoding="utf-8") as fh:
 setup(
     name="neural-spectral-descriptor",
     version="0.1.0",
-    author="Kimun Park, Moon Gi Seok",
+    author="Anonymous Submission",
     author_email="",
     description="Neural Spectral Descriptor for compact LiDAR place recognition",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/DguAiCps/Neural-Spectral-Descriptor",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     classifiers=[

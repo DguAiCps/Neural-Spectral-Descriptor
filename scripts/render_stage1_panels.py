@@ -16,6 +16,7 @@ Usage (inside container):
 """
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -31,7 +32,7 @@ from data.kitti_loader import KITTILoader
 from encoding.range_image import RangeImageProjector
 from encoding.spectral_policy import SoftBinning
 
-KITTI_ROOT = "/home/pkm/NSC_datasets/kitti/dataset"
+KITTI_ROOT = os.path.join(os.environ.get("NSD_DATA_ROOT", str(REPO_ROOT / "data")), "kitti", "dataset")
 OUT_DIR = REPO_ROOT / "docs/paper/body_v1.1/figs/stage1_real"
 
 # KITTI HDL-64E elevation range

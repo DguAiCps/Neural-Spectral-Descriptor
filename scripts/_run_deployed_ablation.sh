@@ -20,7 +20,7 @@ set -euo pipefail
 # Run inside nvcr.io/nvidia/pyg:26.01-py3 from the repo root:
 #   docker run --rm --gpus all --shm-size=16g \
 #     -v /mnt/d/NSD_datasets:/workspace/data \
-#     -v /home/pkm/Neural-Spectral-Codec:/workspace/Neural-Spectral-Codec \
+#     -v <repo-root>:/workspace/Neural-Spectral-Codec \
 #     -w /workspace/Neural-Spectral-Codec \
 #     nvcr.io/nvidia/pyg:26.01-py3 \
 #     bash scripts/_run_deployed_ablation.sh
