@@ -13,10 +13,13 @@ required_files=(
   DATA.md
   EXPERIMENT_HANDOFF.md
   README.md
+  REPRODUCING.md
   RELEASE_CHECKLIST.md
   setup.py
   configs/README.md
   artifacts/MANIFEST.md
+  docs/ENVIRONMENT.md
+  docs/reproducibility_manifest.yaml
   src/data/kitti_loader.py
   src/data/mulran_loader.py
   src/data/multi_dataset_loader.py
@@ -63,6 +66,8 @@ python3 -m py_compile \
   src/encoding/spectral_encoder.py \
   src/gnn/model.py \
   src/keyframe/graph_manager.py
+
+python3 scripts/verify_reproducibility_manifest.py
 
 if [[ "${RUN_TESTS:-0}" == "1" ]]; then
   PYTHONPATH=src pytest -q \

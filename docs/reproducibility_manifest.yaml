@@ -1,0 +1,255 @@
+# Reproduction provenance for every table in docs/paper/body_v2.1/aaai2027_body.tex.
+# Commands run from the repository root.  `none` means no external source tree
+# is required; `not_applicable` means the table is descriptive rather than a run.
+schema_version: 1
+paper_source: docs/paper/body_v2.1/aaai2027_body.tex
+repository_commit: cab7675f1aac66a5bb9199b4835b15995ce57a9a
+environment: docs/ENVIRONMENT.md
+data_contract: DATA.md
+common:
+  config: configs/training_multi_dataset.yaml
+  checkpoints:
+    - checkpoints/800d_4sensor_20260511_161726/best_model.pth
+    - checkpoints/800d_4sensor_seed2_20260604_125426/best_model.pth
+    - checkpoints/800d_4sensor_seed3_20260623_132834/best_model.pth
+  artifacts:
+    - artifacts/key_remetrize_r.npy
+    - artifacts/edge_classifier.pt
+  data_root: NSD_DATA_ROOT (defaults to ./data)
+  seed_policy: "seed 1, 2, and 3; report their arithmetic mean unless overridden below"
+external_repositories:
+  bevplace_official: {path: baselines/_bevplace_official, commit: cab7675f1aac66a5bb9199b4835b15995ce57a9a}
+  seqot: {path: _external/SeqOT, commit: 6e10697a4e6a423b5581e6a6ed6df9cfb386658b}
+  pgat: {path: _external/P-GAT, commit: a66a7018ca5a234975cb4deded3c3db5bc8ebffa}
+  ringsharp: {path: _external/RINGSharp, commit: d4654f74166c6d643e23035a9c274b1ff09be9eb}
+  ring: {path: _external/RING, commit: c79c58584ad841629506b5873ed1877c9c278ce5}
+
+tables:
+  tab:results:
+    scope: main
+    config: configs/training_multi_dataset.yaml + no_interdiff/fixed-alpha overrides
+    command:
+      - "python3 scripts/_pbev_branch_fusion.py --seed {1,2,3}"
+      - "python3 scripts/_hspec_branch_fusion.py --seed {1,2,3} --freqs 12"
+      - "python3 scripts/_final_fix8_agg.py"
+      - "python3 scripts/_ringpp_eval.py --variant {ring,ringpp}"
+      - "python3 scripts/_ringsharp_eval.py --weight <RINGSharp checkpoint>"
+      - "python3 scripts/_seqot_eval.py --seqot-checkpoint <...> --gem-checkpoint <...>"
+      - "python3 scripts/_pgat_eval_rerank.py --checkpoint <...>"
+      - "python3 scripts/finetune_bevplace.py"
+    checkpoints: common + method-specific baseline checkpoints
+    result_artifacts:
+      - "results/height_sota/pbev_branch_fusion{,_seed2,_seed3}.json"
+      - "results/height_sota/hspec_branch_fusion{,_seed2,_seed3}.json"
+      - results/ring_eval.json
+      - results/ringpp_eval.json
+      - results/ringsharp_eval_fix8.json
+      - results/seqot_eval.json
+      - results/pgat_eval*.json
+      - results/per_query_baselines/bevplace/
+    seed_policy: "NSD, NSD-H, BEVPlace++, SeqOT, and P-GAT: 3-seed means; RING#-L: one checkpoint; analytic rows: deterministic"
+    external_commit: [bevplace_official, seqot, pgat, ringsharp, ring]
+  tab:rate_mini:
+    scope: main
+    config: not_applicable
+    command: "python3 scripts/_tables23_fix8.py && python scripts/_verify_alias_source_ladder.py"
+    checkpoints: common
+    result_artifacts: [results/tables23_fix8.json, results/_alias_source/ladder.json]
+    seed_policy: "288D deterministic; context-dependent values use 3 seeds"
+    external_commit: none
+  tab:ctx_summary:
+    scope: main
+    config: configs/training_multi_dataset.yaml + no_interdiff/fixed-alpha overrides
+    command: "python3 scripts/_ctx_perm_fix8.py"
+    checkpoints: common
+    result_artifacts: [results/ctx_perm_fix8.json]
+    seed_policy: "3 seeds; 10 within-sequence permutations per seed"
+    external_commit: none
+  tab:spectrum_roles:
+    scope: main
+    config: configs/training_multi_dataset.yaml + no_interdiff/fixed-alpha overrides
+    command: "python3 scripts/_pbev_branch_fusion.py --seed {1,2,3}"
+    checkpoints: common
+    result_artifacts: ["results/height_sota/pbev_branch_fusion{,_seed2,_seed3}.json"]
+    seed_policy: "3-seed means; train-only fusion tuple selection"
+    external_commit: none
+
+  tab:context_iso:
+    scope: appendix
+    config: configs/training_multi_dataset.yaml + no_interdiff/fixed-alpha overrides
+    command: ["python3 scripts/_tables23_fix8.py", "python3 scripts/_ctx_only_fix8.py"]
+    checkpoints: common
+    result_artifacts: [results/tables23_fix8.json, results/ctx_only_fix8.json]
+    seed_policy: "288D deterministic; 416D/context-only columns are 3-seed means"
+    external_commit: none
+  tab:edge_headline:
+    scope: appendix
+    config: configs/training_multi_dataset.yaml + no_interdiff/fixed-alpha overrides
+    command: "python3 scripts/_edge_ablation_fix8.py"
+    checkpoints: common
+    result_artifacts: [results/edge_ablation_fix8.json]
+    seed_policy: "3-seed means"
+    external_commit: none
+  tab:edgefeat:
+    scope: appendix
+    config: not_applicable
+    command: "python3 scripts/build_and_train_edge_classifier.py --help"
+    checkpoints: [artifacts/edge_classifier.pt]
+    result_artifacts: [results/_edge_cls/classifier.pt, results/_edge_cls/keepk_holdout.json]
+    seed_policy: "single post-hoc classifier trained on the training split"
+    external_commit: none
+  tab:refine_ladder:
+    scope: appendix
+    config: configs/training_multi_dataset_remetrize_twopass.yaml
+    command:
+      - "python3 scripts/run_remetrize_twopass_eval.py seed1 seed2 seed3"
+      - "python3 scripts/run_remetrize_twopass_rerank.py raw seed1 seed2 seed3"
+      - "python3 scripts/run_oracle_ceiling_eval.py seed1"
+    checkpoints: common
+    result_artifacts: ["results/_remetrize_twopass/seed*.json", "results/_remetrize_twopass/rerank_raw_seed*.json", results/_remetrize_twopass/oracle_seed1.json]
+    seed_policy: "reported rungs are 3-seed means except the explicitly marked seed-1 oracle"
+    external_commit: none
+  tab:ablation:
+    scope: appendix
+    config: "configs/_abl_deployed_v{0,1,2,3,4,5,6,7,8}.yaml"
+    command: "bash scripts/_run_deployed_ablation.sh"
+    checkpoints: checkpoints/abl_deployed_v*/best_model.pth
+    result_artifacts: results/deployed_ablation.json
+    seed_policy: "one retrain per row"
+    external_commit: none
+  tab:datasets:
+    scope: appendix
+    config: not_applicable
+    command: not_applicable
+    checkpoints: not_applicable
+    result_artifacts: [DATA.md]
+    seed_policy: not_applicable
+    external_commit: none
+  tab:hyperparams:
+    scope: appendix
+    config: [configs/training_multi_dataset.yaml, artifacts/key_remetrize_r.npy, artifacts/edge_classifier.pt]
+    command: "python3 train_multi_dataset.py --config configs/training_multi_dataset.yaml --encoder-preset no_interdiff --use-gated-context --gate-initial-alpha 0.0625"
+    checkpoints: common
+    result_artifacts: [artifacts/key_remetrize_r.npy, artifacts/edge_classifier.pt]
+    seed_policy: "fixed constants; no aggregation"
+    external_commit: none
+  tab:noninteger_yaw:
+    scope: appendix
+    config: configs/training_multi_dataset.yaml
+    command: "python3 scripts/_verify_noninteger_yaw.py"
+    checkpoints: not_applicable
+    result_artifacts: [results/_alias_source/noninteger_yaw.json]
+    seed_policy: deterministic
+    external_commit: none
+  tab:rotation:
+    scope: appendix
+    config: historical 544D/672D encoder variants
+    command: "python3 scripts/compute_yaw_recall.py"
+    checkpoints: results/ctx128_cosine_bayesian/best_model.pth
+    result_artifacts: [results/aliasrate_yaw_split.json, results/per_query_b3/]
+    seed_policy: "historical control; see table caption"
+    external_commit: bevplace_official
+  tab:aliasrate:
+    scope: appendix
+    config: historical 544D/672D and deployed 288D/416D dumps
+    command: ["python3 scripts/_dump_544_672.py", "python3 scripts/_aliasrate_544672_recompute.py", "python3 scripts/_verify_aliasrate_main.py"]
+    checkpoints: [results/ctx128_cosine_bayesian/best_model.pth, common]
+    result_artifacts: [results/_alias_source/aliasrate_544672.json, results/_verify_aliasrate_main.json]
+    seed_policy: "288D deterministic; 416D uses 3 seeds"
+    external_commit: none
+  tab:miss_decomp:
+    scope: appendix
+    config: configs/training_multi_dataset.yaml
+    command: "python3 scripts/_verify_samespread.py"
+    checkpoints: common
+    result_artifacts: [results/_verify_samespread.json]
+    seed_policy: "288D deterministic; 416D uses 3 seeds"
+    external_commit: none
+  tab:rate_ladder_full:
+    scope: appendix
+    config: not_applicable
+    command: ["python3 scripts/_tables23_fix8.py", "python3 scripts/_rate_rungs_fix8.py", "python3 scripts/_verify_alias_source_ladder.py"]
+    checkpoints: not_applicable
+    result_artifacts: [results/tables23_fix8.json, results/rate_rungs_fix8.json, results/_alias_source/ladder.json]
+    seed_policy: deterministic
+    external_commit: none
+  tab:alias_source:
+    scope: appendix
+    config: not_applicable
+    command: "python3 scripts/_verify_alias_source_ladder.py"
+    checkpoints: common
+    result_artifacts: [results/_alias_source/ladder.json]
+    seed_policy: "encoder values deterministic; context values use dumped seed-1 state where labeled"
+    external_commit: none
+  tab:identifiability:
+    scope: appendix
+    config: configs/training_multi_dataset.yaml + no_interdiff/fixed-alpha overrides
+    command: ["python3 scripts/_dump_final416_seed1.py", "python3 scripts/_verify_identifiability.py"]
+    checkpoints: checkpoints/800d_4sensor_20260511_161726/best_model.pth
+    result_artifacts: [results/_final416_seed1/, results/_alias_source/identifiability.json]
+    seed_policy: seed 1
+    external_commit: none
+  tab:causal:
+    scope: appendix
+    config: configs/training_multi_dataset.yaml + no_interdiff/fixed-alpha overrides
+    command: "python3 scripts/_causal_eval_only.py"
+    checkpoints: common
+    result_artifacts: results/_remetrize_twopass/causal_eval_only.json
+    seed_policy: "3-seed means"
+    external_commit: none
+  tab:ratedist:
+    scope: appendix
+    config: not_applicable
+    command: ["python3 scripts/_final_fix8_agg.py", "python3 scripts/_ringsharp_eval.py --weight <RINGSharp checkpoint>"]
+    checkpoints: common
+    result_artifacts: ["results/height_sota/*branch_fusion*.json", results/ringsharp_eval_fix8.json]
+    seed_policy: "headline operating points: 3-seed means; RING#-L: one checkpoint"
+    external_commit: [bevplace_official, seqot, pgat, ringsharp, ring]
+  tab:transfer:
+    scope: appendix
+    config: [configs/_loso_no_kitti.yaml, configs/_loso_no_nclt.yaml, configs/_loso_no_helipr.yaml, configs/_loso_no_mulran.yaml]
+    command: "bash scripts/_run_transfer.sh"
+    checkpoints: checkpoints/loso_no_*/best_model.pth
+    result_artifacts: ["results/_task3/joint_s{1,2,3}.json", "results/_task3/transfer_lonclt_s{1,2}.json"]
+    seed_policy: "leave-HDL-32E-out: 2 seeds; matched joint comparison: 3 seeds; other rows as reported"
+    external_commit: none
+  tab:yaw_quad:
+    scope: appendix
+    config: configs/training_multi_dataset.yaml + no_interdiff/fixed-alpha overrides
+    command: "python3 scripts/_dump_b3_yaw_perquery.py seed1 seed2 seed3"
+    checkpoints: common
+    result_artifacts: results/per_query_b3/
+    seed_policy: "3-seed means"
+    external_commit: none
+  tab:encoder_preset:
+    scope: appendix
+    config: configs/training_multi_dataset.yaml with each --encoder-preset
+    command: "python3 scripts/evaluate_kitti_checkpoint.py --config configs/training_multi_dataset.yaml --encoder-preset <preset> --skip-checkpoint --sequences 00 05 08"
+    checkpoints: not_applicable
+    result_artifacts: results/encoder_ablation_*_phase256_n400.json
+    seed_policy: deterministic encoder control
+    external_commit: none
+  tab:e2e_latency:
+    scope: appendix
+    config: configs/training_multi_dataset.yaml + no_interdiff/fixed-alpha overrides
+    command: "NSC_N_COARSE=800 python scripts/_bench_latency_memory.py"
+    checkpoints: checkpoints/800d_4sensor_20260511_161726/best_model.pth
+    result_artifacts: results/latency_memory_bench.json
+    seed_policy: seed 1
+    external_commit: none
+  tab:ksweep:
+    scope: appendix
+    config: diagnostic-base protocol
+    command: "python3 scripts/_ksweep_eval.py"
+    checkpoints: common
+    result_artifacts: ["results/_remetrize_twopass/ksweep_{seed1,seed2,seed3}.json", results/_remetrize_twopass/ksweep_3seed_summary.json]
+    seed_policy: "Recall: 3-seed summary; latency: seed-1 instrumentation"
+    external_commit: none
+  tab:fixed_budget:
+    scope: appendix
+    config: "regenerated-cache protocol; candidate-set oracle (raw_height240 second index)"
+    command: "python3 scripts/_fixed_budget_fusion.py --tags K00 K05 K08 N12 N13 TOWN DCC KAI RIV --require-complete-nine --candidate-budgets 50 100 200 --height-variant raw_height240 --seed 1"
+    checkpoints: checkpoints/800d_4sensor_20260511_161726/best_model.pth
+    result_artifacts: ["results/supplementary/fixed_budget_9seq_regenerated_candidate_seed1.json", "results/supplementary/fixed_budget_9seq_summary.json"]
+    seed_policy: "seed 1 only; candidate-set oracle recall, not end-to-end Recall@1"
+    external_commit: none

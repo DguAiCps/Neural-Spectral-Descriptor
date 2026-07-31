@@ -3,11 +3,14 @@
 This branch contains the NSD paper code plus appendix ablations. The
 current source of truth is:
 
+0. `REPRODUCING.md` — reviewer-facing guide: every paper table mapped to its command, checkpoints, and result artifact.
 1. `CLAUDE.md` — current paper-main spec (NSD + NSD-H operating points).
-2. `docs/paper/body_v2.0/aaai2027_body.tex` — paper text and reported numbers.
+2. `docs/paper/body_v2.1/aaai2027_body.tex` — submitted paper text and reported numbers.
 3. `EXPERIMENT_HANDOFF.md` — full experiment history and interpretation.
 4. `RELEASE_800D.md` — base 800D runbook for students continuing the experiments.
 5. `RELEASE_CHECKLIST.md` — final checks before sharing the code.
+6. `docs/reproducibility_manifest.yaml` — table-to-command, artifact, seed, and external-commit provenance.
+7. `docs/ENVIRONMENT.md` — paper container versus local development environment.
 
 The old 544D/672D encoder-bandwidth baseline is still present in configs and
 results for ablation context, but it is not the current paper-main path.
@@ -51,6 +54,12 @@ Run a release smoke check:
 bash scripts/verify_release_smoke.sh
 ```
 
+For any dataset-dependent command, set a portable data root once:
+
+```bash
+export NSD_DATA_ROOT=/absolute/path/to/NSD_datasets
+```
+
 Restore the default paper checkpoint path if the `_handoff` archive is present:
 
 ```bash
@@ -88,6 +97,11 @@ The four-sensor NSD row uses `configs/training_multi_dataset.yaml` with
 closed-form phase sketch. KITTI and NCLT have standalone release runners; the
 remaining HeLiPR/MulRan validation path is retained through the multi-dataset
 training/validation code and the paper result artifacts.
+
+`train_multi_dataset.py` accepts `--data-root` (default:
+`$NSD_DATA_ROOT`, then `data`) and overrides the historical roots in the YAML.
+Use the commands and exact result artifacts in
+`docs/reproducibility_manifest.yaml` when reproducing a reported table.
 
 ## Appendix-Only Runner
 
