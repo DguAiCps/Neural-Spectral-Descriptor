@@ -216,6 +216,13 @@ NSD/NSD-H — **retrieval과 confidence의 분리를 수식으로 고정**:
 
 ## Amendments
 
+- A1 (2026-08-11, 구현 착수 시 스펙 구체화; val/test 접촉 전):
+  ① reciprocal rank(classifier 특징 [4])의 causal 정의 확정 — "sim(i,j)가
+  후보 노드 j의 **삽입 시점 prefix top-M 유사도 목록**에서 차지하는 삽입
+  위치(strictly-greater 개수, M 상한)". j가 미래의 i를 순위화하지 않으며
+  O(1)/쌍·prefix-불변. ② 특징 [13]의 고정 정규화 상수 D_max = 5000.
+  ③ Frozen-GNN 트랙의 causal 그래프도 재학습 트랙과 동일 조건
+  (temporal_neighbors 20 past band) — 두 트랙의 조건 통일.
 - rev.2 (2026-08-11, 동결 전): 검토 7건 반영 — ① 후보 생성 prefix화
   (선발-후-제거 금지) + verified-loop 엣지 처리, ② classifier prefix
   불변성 + 고정 정규화, ③ "frozen-causal 하한" → "Frozen-GNN causal
