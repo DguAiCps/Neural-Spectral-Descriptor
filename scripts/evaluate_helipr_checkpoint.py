@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Dict, List
@@ -156,7 +157,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--use-gated-context", action="store_true")
     parser.add_argument("--gate-initial-alpha", type=float, default=0.0625)
-    parser.add_argument("--root", default="/workspace/data/helipr")
+    parser.add_argument("--root", default=os.environ.get("NSD_HELIPR_ROOT", "data/helipr"))
     parser.add_argument("--sequences", nargs="+", default=["Town01"])
     parser.add_argument("--cache-dir", default="data/preprocessed_helipr_checkpoint_eval")
     parser.add_argument("--bev-cache-dir", default="data/preprocessed_helipr_bev_layout")

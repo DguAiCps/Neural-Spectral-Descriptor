@@ -1,0 +1,435 @@
+{
+  "_meta": {
+    "generated_by": "scripts/_pd_build_test_caches.py --manifest",
+    "config": "configs/training_place_disjoint.yaml",
+    "encoder_preset": "no_interdiff",
+    "mcd_elevation_range": [
+      -22.5,
+      22.5
+    ],
+    "n_sequences": 42,
+    "note": "one heavy sequence per process: drive with --seqs sensor/seq, one subprocess each"
+  },
+  "sequences": [
+    {
+      "sensor": "kitti",
+      "sequence": "00",
+      "sensor_family": "kitti",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_fecdaef7_kitti_test_00.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_kitti_00.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_kitti_00.npz"
+      }
+    },
+    {
+      "sensor": "kitti",
+      "sequence": "05",
+      "sensor_family": "kitti",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_fecdaef7_kitti_test_05.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_kitti_05.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_kitti_05.npz"
+      }
+    },
+    {
+      "sensor": "kitti",
+      "sequence": "08",
+      "sensor_family": "kitti",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_fecdaef7_kitti_test_08.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_kitti_08.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_kitti_08.npz"
+      }
+    },
+    {
+      "sensor": "helipr",
+      "sequence": "Town01",
+      "sensor_family": "helipr",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_ad22d735_helipr_test_Town01.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_helipr_Town01.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_helipr_Town01.npz"
+      }
+    },
+    {
+      "sensor": "helipr",
+      "sequence": "Town02",
+      "sensor_family": "helipr",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_ad22d735_helipr_test_Town02.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_helipr_Town02.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_helipr_Town02.npz"
+      }
+    },
+    {
+      "sensor": "helipr",
+      "sequence": "Town03",
+      "sensor_family": "helipr",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_ad22d735_helipr_test_Town03.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_helipr_Town03.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_helipr_Town03.npz"
+      }
+    },
+    {
+      "sensor": "helipr",
+      "sequence": "Bridge04",
+      "sensor_family": "helipr",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_ad22d735_helipr_test_Bridge04.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_helipr_Bridge04.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_helipr_Bridge04.npz"
+      }
+    },
+    {
+      "sensor": "helipr",
+      "sequence": "KAIST04",
+      "sensor_family": "helipr",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_ad22d735_helipr_test_KAIST04.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_helipr_KAIST04.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_helipr_KAIST04.npz"
+      }
+    },
+    {
+      "sensor": "helipr",
+      "sequence": "KAIST05",
+      "sensor_family": "helipr",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_ad22d735_helipr_test_KAIST05.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_helipr_KAIST05.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_helipr_KAIST05.npz"
+      }
+    },
+    {
+      "sensor": "helipr",
+      "sequence": "KAIST06",
+      "sensor_family": "helipr",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_ad22d735_helipr_test_KAIST06.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_helipr_KAIST06.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_helipr_KAIST06.npz"
+      }
+    },
+    {
+      "sensor": "helipr",
+      "sequence": "DCC04",
+      "sensor_family": "helipr",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_ad22d735_helipr_test_DCC04.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_helipr_DCC04.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_helipr_DCC04.npz"
+      }
+    },
+    {
+      "sensor": "helipr",
+      "sequence": "DCC05",
+      "sensor_family": "helipr",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_ad22d735_helipr_test_DCC05.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_helipr_DCC05.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_helipr_DCC05.npz"
+      }
+    },
+    {
+      "sensor": "helipr",
+      "sequence": "DCC06",
+      "sensor_family": "helipr",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_ad22d735_helipr_test_DCC06.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_helipr_DCC06.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_helipr_DCC06.npz"
+      }
+    },
+    {
+      "sensor": "helipr",
+      "sequence": "Riverside04",
+      "sensor_family": "helipr",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_ad22d735_helipr_test_Riverside04.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_helipr_Riverside04.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_helipr_Riverside04.npz"
+      }
+    },
+    {
+      "sensor": "helipr",
+      "sequence": "Riverside05",
+      "sensor_family": "helipr",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_ad22d735_helipr_test_Riverside05.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_helipr_Riverside05.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_helipr_Riverside05.npz"
+      }
+    },
+    {
+      "sensor": "helipr",
+      "sequence": "Riverside06",
+      "sensor_family": "helipr",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_ad22d735_helipr_test_Riverside06.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_helipr_Riverside06.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_helipr_Riverside06.npz"
+      }
+    },
+    {
+      "sensor": "mulran",
+      "sequence": "DCC01",
+      "sensor_family": "mulran",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_50223b37_mulran_test_DCC01.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mulran_DCC01.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mulran_DCC01.npz"
+      }
+    },
+    {
+      "sensor": "mulran",
+      "sequence": "DCC02",
+      "sensor_family": "mulran",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_50223b37_mulran_test_DCC02.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mulran_DCC02.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mulran_DCC02.npz"
+      }
+    },
+    {
+      "sensor": "mulran",
+      "sequence": "DCC03",
+      "sensor_family": "mulran",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_50223b37_mulran_test_DCC03.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mulran_DCC03.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mulran_DCC03.npz"
+      }
+    },
+    {
+      "sensor": "mulran",
+      "sequence": "KAIST01",
+      "sensor_family": "mulran",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_50223b37_mulran_test_KAIST01.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mulran_KAIST01.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mulran_KAIST01.npz"
+      }
+    },
+    {
+      "sensor": "mulran",
+      "sequence": "KAIST02",
+      "sensor_family": "mulran",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_50223b37_mulran_test_KAIST02.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mulran_KAIST02.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mulran_KAIST02.npz"
+      }
+    },
+    {
+      "sensor": "mulran",
+      "sequence": "KAIST03",
+      "sensor_family": "mulran",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_50223b37_mulran_test_KAIST03.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mulran_KAIST03.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mulran_KAIST03.npz"
+      }
+    },
+    {
+      "sensor": "mulran",
+      "sequence": "Riverside01",
+      "sensor_family": "mulran",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_50223b37_mulran_test_Riverside01.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mulran_Riverside01.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mulran_Riverside01.npz"
+      }
+    },
+    {
+      "sensor": "mulran",
+      "sequence": "Riverside02",
+      "sensor_family": "mulran",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_50223b37_mulran_test_Riverside02.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mulran_Riverside02.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mulran_Riverside02.npz"
+      }
+    },
+    {
+      "sensor": "mulran",
+      "sequence": "Riverside03",
+      "sensor_family": "mulran",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_50223b37_mulran_test_Riverside03.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mulran_Riverside03.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mulran_Riverside03.npz"
+      }
+    },
+    {
+      "sensor": "nclt",
+      "sequence": "2012-02-04",
+      "sensor_family": "nclt",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_aff53e59_nclt_test_2012-02-04.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_nclt_2012-02-04.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_nclt_2012-02-04.npz"
+      }
+    },
+    {
+      "sensor": "nclt",
+      "sequence": "2012-03-17",
+      "sensor_family": "nclt",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_aff53e59_nclt_test_2012-03-17.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_nclt_2012-03-17.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_nclt_2012-03-17.npz"
+      }
+    },
+    {
+      "sensor": "kitti360",
+      "sequence": "0000",
+      "sensor_family": "kitti",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_fecdaef7_kitti360_test_0000.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_kitti360_0000.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_kitti360_0000.npz"
+      }
+    },
+    {
+      "sensor": "kitti360",
+      "sequence": "0004",
+      "sensor_family": "kitti",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_fecdaef7_kitti360_test_0004.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_kitti360_0004.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_kitti360_0004.npz"
+      }
+    },
+    {
+      "sensor": "kitti360",
+      "sequence": "0006",
+      "sensor_family": "kitti",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_fecdaef7_kitti360_test_0006.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_kitti360_0006.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_kitti360_0006.npz"
+      }
+    },
+    {
+      "sensor": "mcd",
+      "sequence": "kth_day_06",
+      "sensor_family": "mcd",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_46508fcb_mcd_test_kth_day_06.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mcd_kth_day_06.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mcd_kth_day_06.npz"
+      }
+    },
+    {
+      "sensor": "mcd",
+      "sequence": "kth_day_09",
+      "sensor_family": "mcd",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_46508fcb_mcd_test_kth_day_09.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mcd_kth_day_09.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mcd_kth_day_09.npz"
+      }
+    },
+    {
+      "sensor": "mcd",
+      "sequence": "kth_day_10",
+      "sensor_family": "mcd",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_46508fcb_mcd_test_kth_day_10.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mcd_kth_day_10.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mcd_kth_day_10.npz"
+      }
+    },
+    {
+      "sensor": "mcd",
+      "sequence": "kth_night_01",
+      "sensor_family": "mcd",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_46508fcb_mcd_test_kth_night_01.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mcd_kth_night_01.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mcd_kth_night_01.npz"
+      }
+    },
+    {
+      "sensor": "mcd",
+      "sequence": "kth_night_04",
+      "sensor_family": "mcd",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_46508fcb_mcd_test_kth_night_04.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mcd_kth_night_04.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mcd_kth_night_04.npz"
+      }
+    },
+    {
+      "sensor": "mcd",
+      "sequence": "kth_night_05",
+      "sensor_family": "mcd",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_46508fcb_mcd_test_kth_night_05.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mcd_kth_night_05.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mcd_kth_night_05.npz"
+      }
+    },
+    {
+      "sensor": "mcd",
+      "sequence": "tuhh_day_02",
+      "sensor_family": "mcd",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_46508fcb_mcd_test_tuhh_day_02.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mcd_tuhh_day_02.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mcd_tuhh_day_02.npz"
+      }
+    },
+    {
+      "sensor": "mcd",
+      "sequence": "tuhh_day_03",
+      "sensor_family": "mcd",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_46508fcb_mcd_test_tuhh_day_03.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mcd_tuhh_day_03.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mcd_tuhh_day_03.npz"
+      }
+    },
+    {
+      "sensor": "mcd",
+      "sequence": "tuhh_day_04",
+      "sensor_family": "mcd",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_46508fcb_mcd_test_tuhh_day_04.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mcd_tuhh_day_04.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mcd_tuhh_day_04.npz"
+      }
+    },
+    {
+      "sensor": "mcd",
+      "sequence": "tuhh_night_07",
+      "sensor_family": "mcd",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_46508fcb_mcd_test_tuhh_night_07.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mcd_tuhh_night_07.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mcd_tuhh_night_07.npz"
+      }
+    },
+    {
+      "sensor": "mcd",
+      "sequence": "tuhh_night_08",
+      "sensor_family": "mcd",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_46508fcb_mcd_test_tuhh_night_08.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mcd_tuhh_night_08.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mcd_tuhh_night_08.npz"
+      }
+    },
+    {
+      "sensor": "mcd",
+      "sequence": "tuhh_night_09",
+      "sensor_family": "mcd",
+      "expected": {
+        "operating_cache": "data/preprocessed_pd2026/cache_46508fcb_mcd_test_tuhh_night_09.npz",
+        "testlayouts": "data/preprocessed_pd2026/testlayouts_mcd_tuhh_night_09.npz",
+        "testspec": "data/preprocessed_pd2026/testspec_mcd_tuhh_night_09.npz"
+      }
+    }
+  ]
+}

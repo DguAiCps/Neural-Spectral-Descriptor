@@ -1,3 +1,7 @@
+# Local development/test environment (Python 3.8+).
+# This is intentionally distinct from the paper container recorded in
+# docs/ENVIRONMENT.md; do not downgrade that container to these pins.
+
 # Deep Learning
 torch==2.1.0
 torch-geometric==2.4.0

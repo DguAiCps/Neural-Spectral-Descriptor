@@ -192,7 +192,9 @@ def main():
     fig.suptitle('HeLiPR Ground Truth Trajectories', fontsize=14, fontweight='bold')
 
     for i, seq in enumerate(helipr_seqs):
-        gt_file = HELIPR_ROOT / seq / seq / "LiDAR_GT" / "Velodyne_gt.txt"
+        gt_file = HELIPR_ROOT / seq / "LiDAR_GT" / "Velodyne_gt.txt"
+        if not gt_file.exists():  # legacy double-nested layout
+            gt_file = HELIPR_ROOT / seq / seq / "LiDAR_GT" / "Velodyne_gt.txt"
         if not gt_file.exists():
             axes_flat[i].set_title(f"{seq} (NOT FOUND)", fontsize=9, color='red')
             axes_flat[i].axis('off')

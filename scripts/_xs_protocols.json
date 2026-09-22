@@ -1,0 +1,32 @@
+{
+  "name": "RING-style cross-session protocol under a common keyframe roster",
+  "naming_note": "NOT the official RING roster: map/query sets are resampled at 20 m / 5 m from our pd2026 keyframe caches. Never call this 'official RING protocol' or 'standard RING benchmark reproduction'.",
+  "constants": {
+    "db_spacing_m": 20.0,
+    "query_spacing_m": 5.0,
+    "roster_radius_m": 20.0,
+    "thresholds_m": [5.0, 10.0, 15.0, 20.0],
+    "k_values": [1, 5, 10],
+    "recall_pct_rule": "k_1pct = max(int(round(n_db / 100.0)), 1)",
+    "planar": true,
+    "pool_k": 100,
+    "n_coarse_baseline": 200,
+    "pose_source": "results/pd2026/keys_pd_s1_{sensor}_{seq}_gp.npz",
+    "body_metrics": ["R@1@5m", "R@1@20m", "R1pct@20m"]
+  },
+  "protocols": {
+    "nclt_0204_0317":  {"sensor": "nclt",   "db_seq": "2012-02-04",  "query_seq": "2012-03-17"},
+    "dcc_01_02":       {"sensor": "mulran", "db_seq": "DCC01",       "query_seq": "DCC02"},
+    "dcc_01_03":       {"sensor": "mulran", "db_seq": "DCC01",       "query_seq": "DCC03"},
+    "kaist_01_02":     {"sensor": "mulran", "db_seq": "KAIST01",     "query_seq": "KAIST02"},
+    "kaist_01_03":     {"sensor": "mulran", "db_seq": "KAIST01",     "query_seq": "KAIST03"},
+    "riverside_01_02": {"sensor": "mulran", "db_seq": "Riverside01", "query_seq": "Riverside02"},
+    "riverside_01_03": {"sensor": "mulran", "db_seq": "Riverside01", "query_seq": "Riverside03"}
+  },
+  "sites": {
+    "nclt":      ["nclt_0204_0317"],
+    "dcc":       ["dcc_01_02", "dcc_01_03"],
+    "kaist":     ["kaist_01_02", "kaist_01_03"],
+    "riverside": ["riverside_01_02", "riverside_01_03"]
+  }
+}

@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-REPO = Path('/rise/RISE1/workspace/impl/NSD-paper')
+REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'src'))
 
 from keyframe.selector import Keyframe

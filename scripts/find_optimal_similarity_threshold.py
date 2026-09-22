@@ -148,8 +148,8 @@ def prepare_dataset(name):
         positions = gt_xyz[matched]
 
     elif name == 'town01':
-        gt_file = Path("/workspace/data/helipr/Town01/Town01/LiDAR_GT/Velodyne_gt.txt")
-        scan_dir = Path("/workspace/data/helipr/Town01/Town01/LiDAR/Velodyne")
+        gt_file = Path("/workspace/data/helipr/Town01/LiDAR_GT/Velodyne_gt.txt")
+        scan_dir = Path("/workspace/data/helipr/Town01/LiDAR/Velodyne")
         cfg = SENSOR_CONFIGS['helipr']
         load_bin = load_helipr_bin
 

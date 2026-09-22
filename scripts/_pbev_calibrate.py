@@ -4,8 +4,8 @@ pbev branch-substitution run, with the dedicated-height branch as reference."""
 import json
 from pathlib import Path
 
-REPO = Path('/rise/RISE1/workspace/impl/NSD-paper')
-R = REPO / 'results/height_sota'
+REPO = Path(__file__).resolve().parents[1]
+R = REPO / "results" / "height_sota"
 
 TRAIN = ['K01_TR', 'K02_TR', 'K06_TR', 'K07_TR', 'N0511_TR', 'N0804_TR']
 VAL9 = ['K00', 'K05', 'K08', 'N12', 'N13', 'TOWN', 'DCC', 'KAI', 'RIV']

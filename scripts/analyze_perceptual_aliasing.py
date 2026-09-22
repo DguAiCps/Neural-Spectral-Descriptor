@@ -302,8 +302,8 @@ def prepare_dataset_full(name):
         print(f"  Keyframes: {n_kf} (delta_d={DISTANCE_THRESHOLD}m)")
 
     elif name == 'town01':
-        gt_file = Path("/workspace/data/helipr/Town01/Town01/LiDAR_GT/Velodyne_gt.txt")
-        scan_dir = Path("/workspace/data/helipr/Town01/Town01/LiDAR/Velodyne")
+        gt_file = Path("/workspace/data/helipr/Town01/LiDAR_GT/Velodyne_gt.txt")
+        scan_dir = Path("/workspace/data/helipr/Town01/LiDAR/Velodyne")
         cfg = SENSOR_CONFIGS['helipr']
         load_bin = load_helipr_bin
         raw_gt = load_helipr_poses(gt_file)

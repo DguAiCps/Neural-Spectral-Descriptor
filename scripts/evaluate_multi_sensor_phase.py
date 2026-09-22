@@ -60,7 +60,9 @@ def make_loader(dataset_type: str, root: str, sequence: str):
     if dataset_type == "nclt":
         return NCLTLoader(root, sequence, lazy_load=True)
     if dataset_type == "helipr":
-        seq_path = os.path.join(root, sequence, sequence)
+        seq_path = os.path.join(root, sequence)
+        if not os.path.isdir(os.path.join(seq_path, "LiDAR")):
+            seq_path = os.path.join(root, sequence, sequence)  # legacy double-nested layout
         return HeLiPRLoader(seq_path, lazy_load=True)
     if dataset_type == "mulran":
         return MulRanLoader(root, sequence, lazy_load=True)

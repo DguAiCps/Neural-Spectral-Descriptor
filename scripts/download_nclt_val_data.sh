@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DATA_ROOT="${1:-/workspace/data}"
+DATA_ROOT="${1:-${NSD_DATA_ROOT:-data}}"
 NCLT_ROOT="${DATA_ROOT}/nclt"
 LOG_DIR="${DATA_ROOT}/download_logs"
 DATES="${NSD_NCLT_DATES:-2012-01-08 2013-01-10}"
@@ -43,6 +43,6 @@ download_date() {
   done
   cd "${NCLT_ROOT}"
   wget -c --progress=dot:giga \
-    https://s3.us-east-2.amazonaws.com/nclt.perl.engin.umich.edu/velodyne_data/laser_angles.csv
+    https://s3.us-east-2.amazonaws.com/nclt.perl.engin.umich.edu/laser_angles.csv
   log "NCLT validation download finished"
 } 2>&1 | tee -a "${LOG_DIR}/nsd_nclt_val_data.log"

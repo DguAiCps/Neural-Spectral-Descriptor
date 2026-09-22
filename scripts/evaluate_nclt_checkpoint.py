@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Dict, List
@@ -150,7 +151,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--use-gated-context", action="store_true")
     parser.add_argument("--gate-initial-alpha", type=float, default=0.0625)
-    parser.add_argument("--root", default="/workspace/data/nclt")
+    parser.add_argument("--root", default=os.environ.get("NSD_NCLT_ROOT", "data/nclt"))
     parser.add_argument("--dates", nargs="+", default=["2012-01-08", "2013-01-10"])
     parser.add_argument("--cache-dir", default="data/preprocessed_nclt_checkpoint_eval")
     parser.add_argument("--bev-cache-dir", default="data/preprocessed_nclt_bev_layout")

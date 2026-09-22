@@ -1,0 +1,50 @@
+{
+  "description": "Cross-session (database vs. query) protocols for the place-disjoint (pd2026) full-key evaluation. Per-sequence 416D keys are dumped by scripts/_pd_dump_keys.py (field emb416: deployed two-pass B3 embedding, L2-normalized; identical pipeline to scripts/_pd_branch_fusion.nsd_embedding_pd). Evaluation is scripts/evaluate_cross_session.py (torch-free host): cosine top-k over the concatenated DB, success if any top-k DB pose lies within the threshold; queries with no DB pose within the threshold are excluded from the recall denominator and reported as frac_no_match. Driver: scripts/_pd_xsession_eval.py.",
+  "key_dump": {
+    "script": "scripts/_pd_dump_keys.py",
+    "key_file_pattern": "results/pd2026/keys_{variant}_s{seed}_{sensor}_{seq}.npz",
+    "field": "emb416",
+    "optional_branch_fields": ["pbev_mag", "hspec_mag"],
+    "gpu_command": "docker exec -e PYTHONDONTWRITEBYTECODE=1 -w /workspace/Neural-Spectral-Codec ring_baseline python3 scripts/_pd_dump_keys.py --variant {variant} --seed {seed} --seqs {sensor}/{seq}"
+  },
+  "thresholds_m": [5.0, 20.0],
+  "k_values": [1, 5],
+  "protocols": {
+    "mulran_dcc": {
+      "sensor": "mulran",
+      "db_seqs": ["DCC01", "DCC02"],
+      "query_seq": "DCC03",
+      "db_spacing_m": null,
+      "query_spacing_m": null
+    },
+    "mulran_kaist": {
+      "sensor": "mulran",
+      "db_seqs": ["KAIST01", "KAIST02"],
+      "query_seq": "KAIST03",
+      "db_spacing_m": null,
+      "query_spacing_m": null
+    },
+    "mulran_riverside": {
+      "sensor": "mulran",
+      "db_seqs": ["Riverside01", "Riverside02"],
+      "query_seq": "Riverside03",
+      "db_spacing_m": null,
+      "query_spacing_m": null
+    },
+    "nclt_0204_0317": {
+      "sensor": "nclt",
+      "db_seqs": ["2012-02-04"],
+      "query_seq": "2012-03-17",
+      "db_spacing_m": 20.0,
+      "query_spacing_m": 5.0,
+      "note": "RING/RING++ convention: database 2012-02-04 sampled every 20 m, query 2012-03-17 every 5 m"
+    },
+    "helipr_town": {
+      "sensor": "helipr",
+      "db_seqs": ["Town01", "Town02"],
+      "query_seq": "Town03",
+      "db_spacing_m": null,
+      "query_spacing_m": null
+    }
+  }
+}

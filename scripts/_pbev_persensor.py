@@ -6,7 +6,8 @@ import json
 import statistics
 from pathlib import Path
 
-R = Path('/rise/RISE1/workspace/impl/NSD-paper/results/height_sota')
+REPO = Path(__file__).resolve().parents[1]
+R = REPO / "results" / "height_sota"
 FILES = {1: 'pbev_branch_fusion.json',
          2: 'pbev_branch_fusion_seed2.json',
          3: 'pbev_branch_fusion_seed3.json'}

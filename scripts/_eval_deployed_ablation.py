@@ -26,6 +26,8 @@ Results merge into results/deployed_ablation.json (one key per variant).
 from __future__ import annotations
 import argparse
 import json
+import shlex
+import sys
 import sys
 from pathlib import Path
 
@@ -45,7 +47,7 @@ from run_kitti_operating_point import (  # noqa: E402
 from keyframe.graph_manager import filter_edges_by_type  # noqa: E402
 
 CACHE = REPO / "data/preprocessed_cross_sensor_operating"
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DEFAULT_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTH, SKIP = 5.0, 30
 
 # KITTI+NCLT+HeLiPR analysis subset (matches tab:ablation, 4,845 queries)
@@ -180,12 +182,13 @@ def cosine_r1(key: np.ndarray, poses: np.ndarray) -> tuple[float, int]:
 
 
 def eval_variant(variant: str, config_path: Path, ckpt_path: Path,
-                 sequences: list[tuple[str, str]]) -> dict:
+                 sequences: list[tuple[str, str]], temporal_edge_mode: str,
+                 device: str, label: str | None = None) -> dict:
     cfg = load_variant_config(config_path)
     edge_type_filter = (
         cfg["keyframe"].get("graph", {}).get("edge_type_filter", "both")
     )
-    model = _make_model(cfg, ckpt_path, DEVICE)
+    model = _make_model(cfg, ckpt_path, device)
     core = model.gnn if hasattr(model, "gnn") else model
     assert getattr(core, "key_scale", None) is None, (
         "raw-d eval requires key_remetrize disabled")
@@ -196,15 +199,15 @@ def eval_variant(variant: str, config_path: Path, ckpt_path: Path,
         graph = _build_eval_graph(
             keyframes=_cache_to_keyframes(z), poses=z["poses"],
             descriptors=z["descriptors"].astype(np.float32), cache=z,
-            config=cfg, device=DEVICE,
-            temporal_edge_mode="bidirectional", temporal_direction_mode="none",
+            config=cfg, device=device,
+            temporal_edge_mode=temporal_edge_mode, temporal_direction_mode="none",
             similarity_min_k=0, phase_features=None, sensor_key=sensor,
         )
         graph = filter_edges_by_type(graph, edge_type_filter)
         n_t = int((graph.edge_type == 0).sum())
         n_s = int((graph.edge_type == 1).sum())
         with torch.no_grad():
-            emb = model(graph.to(DEVICE)).detach().cpu().numpy()
+            emb = model(graph.to(device)).detach().cpu().numpy()
         r1, nq = cosine_r1(emb, z["poses"])
         key = f"{sensor}/{seq}"
         per_seq[key] = {"recall@1": r1, "n_queries": nq,
@@ -217,12 +220,13 @@ def eval_variant(variant: str, config_path: Path, ckpt_path: Path,
     total_q = sum(v["n_queries"] for v in per_seq.values())
     avg = sum(v["recall@1"] * v["n_queries"] for v in per_seq.values()) / max(total_q, 1)
     return {
-        "label": VARIANTS.get(variant, {}).get("label", variant),
+        "label": label or VARIANTS.get(variant, {}).get("label", variant),
         "config": str(config_path),
         "checkpoint": str(ckpt_path),
         "edge_type_filter": edge_type_filter,
         "protocol": {"distance_threshold_m": DTH, "skip_frames": SKIP,
-                     "metric": "cosine", "key": "raw 416D (no re-metrization)"},
+                     "metric": "cosine", "key": "raw 416D (no re-metrization)",
+                     "temporal_edge_mode": temporal_edge_mode},
         "per_sequence": per_seq,
         "n_queries_total": total_q,
         "avg_recall@1_query_weighted": avg,
@@ -237,10 +241,20 @@ def main() -> None:
                     help="override config YAML (single-variant runs only)")
     ap.add_argument("--checkpoint", type=Path, default=None,
                     help="override checkpoint path (single-variant runs only)")
+    ap.add_argument("--label", default=None,
+                    help="override the result label for a custom checkpoint")
+    ap.add_argument("--training-seed", type=int, default=None,
+                    help="record the seed used to train a custom checkpoint")
     ap.add_argument("--sequences", nargs="*", default=None,
                     help="subset like kitti/00 nclt/2013-01-10 (default: all 6)")
     ap.add_argument("--out", type=Path,
                     default=REPO / "results/deployed_ablation.json")
+    ap.add_argument("--temporal-edge-mode",
+                    choices=("bidirectional", "past_to_current", "future_to_current"),
+                    default="bidirectional",
+                    help="Override graph temporal edges for a matching retrained model")
+    ap.add_argument("--device", default=DEFAULT_DEVICE, choices=("cpu", "cuda"),
+                    help="Evaluation device; CPU is useful while the single GPU trains.")
     args = ap.parse_args()
 
     if (args.config or args.checkpoint) and len(args.variants) != 1:
@@ -266,7 +280,15 @@ def main() -> None:
             print(f"[SKIP] {variant}: checkpoint missing: {ckpt_path}")
             continue
         print(f"\n=== {variant}: {spec['label']} ===", flush=True)
-        results[variant] = eval_variant(variant, config_path, ckpt_path, sequences)
+        result = eval_variant(
+            variant, config_path, ckpt_path, sequences, args.temporal_edge_mode,
+            args.device, args.label)
+        result["provenance"] = {
+            "training_seed": args.training_seed,
+            "evaluation_command": shlex.join(sys.argv),
+            "cache_root": str(CACHE),
+        }
+        results[variant] = result
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(results, indent=2))
         print(f"  -> merged into {args.out}")

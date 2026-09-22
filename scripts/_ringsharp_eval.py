@@ -31,6 +31,7 @@ Writes results/ringsharp_eval.json. Example (inside docker):
 from __future__ import annotations
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -39,6 +40,7 @@ import numpy as np
 import torch
 
 REPO = Path(__file__).resolve().parents[1]
+DATA_ROOT = os.environ.get("NSD_DATA_ROOT", str(REPO / "data"))
 RINGSHARP = REPO / "_external" / "RINGSharp"
 sys.path.insert(0, str(RINGSHARP))
 sys.path.insert(1, str(REPO))
@@ -109,7 +111,7 @@ def compute_seq_features(model, trans_cnn, dtype, seq, scan_ids, device, batch,
     packed occupancy bevs (n, packed) uint8 cpu, and cached trans-branch
     features bts (n,...) fp16 cpu (official map_bevs_trans precompute; avoids
     re-encoding [query]+candidates at every rerank call)."""
-    loader = make_nsc_loader(dtype, seq, "/workspace/data")
+    loader = make_nsc_loader(dtype, seq, DATA_ROOT)
     n = len(scan_ids) if not max_frames else min(max_frames, len(scan_ids))
     glob, specs, bevs_packed, bts = [], [], [], []
     t0 = time.time()

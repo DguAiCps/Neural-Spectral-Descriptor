@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -38,7 +40,7 @@ from build_and_train_edge_classifier import (
 )
 
 
-ROOT = Path("/rise/RISE1/workspace/data")
+ROOT = Path(os.environ.get("NSD_DATA_ROOT", REPO / "data"))
 CACHE_OUT = REPO / "results/height_sota/cache"
 RESULT_OUT = REPO / "results/height_sota"
 DTH, SKIP = 5.0, 30
@@ -56,14 +58,39 @@ JOBS = {
     "N0511_TR": ("nclt", "2012-05-11", "data/preprocessed_nclt_fix8/nclt_operating_2012-05-11_layout60_stride1.npz"),
     "N0804_TR": ("nclt", "2012-08-04", "data/preprocessed_nclt_fix8/nclt_operating_2012-08-04_layout60_stride1.npz"),
     "TOWN": ("helipr", "Town01", "data/preprocessed_cross_sensor_operating/helipr_operating_Town01_layout60_stride1.npz"),
-    "DCC": ("mulran", "DCC03", "data/preprocessed/cache_dabab5b5_mulran_val_DCC03.npz"),
-    "KAI": ("mulran", "KAIST03", "data/preprocessed/cache_dabab5b5_mulran_val_KAIST03.npz"),
-    "RIV": ("mulran", "Riverside03", "data/preprocessed/cache_dabab5b5_mulran_val_Riverside03.npz"),
+    "DCC": ("mulran", "DCC03", "data/preprocessed_cross_sensor_operating/mulran_operating_DCC03_layout60_stride1.npz"),
+    "KAI": ("mulran", "KAIST03", "data/preprocessed_cross_sensor_operating/mulran_operating_KAIST03_layout60_stride1.npz"),
+    "RIV": ("mulran", "Riverside03", "data/preprocessed_cross_sensor_operating/mulran_operating_Riverside03_layout60_stride1.npz"),
 }
 
 
 def l2(x: np.ndarray) -> np.ndarray:
     return x / np.clip(np.linalg.norm(x, axis=-1, keepdims=True), 1e-12, None)
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def parse_cache_overrides(entries: list[str]) -> dict[str, Path]:
+    overrides = {}
+    for entry in entries:
+        if "=" not in entry:
+            raise ValueError(f"cache override must be TAG=PATH, got {entry!r}")
+        tag, raw_path = entry.split("=", 1)
+        if tag not in JOBS:
+            raise ValueError(f"unknown cache override tag: {tag}")
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = REPO / path
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        overrides[tag] = path
+    return overrides
 
 
 def bin288(m: np.ndarray) -> np.ndarray:
@@ -315,12 +342,14 @@ for wn in (0.25, 0.5, 1.0, 2.0):
 WEIGHTS = sorted(set(WEIGHTS))
 
 
-def evaluate(poses, nsd, hkey, hfft, hnorm, column_bank, pool_k: int):
+def evaluate(poses, nsd, hkey, hfft, hnorm, column_bank, pool_k: int,
+             dump_weight=None):
     positions = poses[:, :3, 3]
     queries = _find_queries(poses, DTH, SKIP)
     correct = {str(w): 0 for w in WEIGHTS}
     correct.update({"nsd": 0, "height": 0, "oracle_union": 0})
     gt_pool = 0
+    perq = [] if dump_weight is not None else None
     for qi, (q, _) in enumerate(queries):
         cn = _topk_cosine(nsd, q, pool_k + 2 * SKIP, SKIP)[:pool_k]
         ch = _topk_cosine(hkey, q, pool_k + 2 * SKIP, SKIP)[:pool_k]
@@ -335,7 +364,10 @@ def evaluate(poses, nsd, hkey, hfft, hnorm, column_bank, pool_k: int):
         sd = minmax(column_align_scores(column_bank, q, candidates))
         for w in WEIGHTS:
             score = w[0] * sn + w[1] * sh + w[2] * sa + w[3] * sd
-            correct[str(w)] += bool(good[int(np.argmax(score))])
+            hit = bool(good[int(np.argmax(score))])
+            correct[str(w)] += hit
+            if perq is not None and w == dump_weight:
+                perq.append([int(q), int(hit)])
 
         correct["nsd"] += np.linalg.norm(
             positions[_topk_cosine(nsd, q, 1 + 2 * SKIP, SKIP)[0]] - positions[q]) < DTH
@@ -344,7 +376,10 @@ def evaluate(poses, nsd, hkey, hfft, hnorm, column_bank, pool_k: int):
         if qi and qi % 500 == 0:
             print(f"  fusion queries {qi}/{len(queries)}", flush=True)
     n = max(len(queries), 1)
-    return {k: float(v / n) for k, v in correct.items()} | {"n_queries": len(queries)}
+    out = {k: float(v / n) for k, v in correct.items()} | {"n_queries": len(queries)}
+    if perq is not None:
+        out["_perquery"] = perq
+    return out
 
 
 def main():
@@ -356,17 +391,41 @@ def main():
     ap.add_argument("--variants", nargs="*", default=None,
                     choices=("legacy240", "raw_height240", "height240",
                              "height_density480"))
+    ap.add_argument("--output", type=Path, default=None,
+                    help="Optional JSON path; defaults to the historical result artifact.")
+    ap.add_argument("--cache-override", action="append", default=[], metavar="TAG=PATH",
+                    help="Use an explicit cache for a tag without altering JOBS or caches.")
     args = ap.parse_args()
     RESULT_OUT.mkdir(parents=True, exist_ok=True)
     cfg, model, clf, clf_blob = make_model(args.device, args.seed)
     encoder = _make_encoder(cfg, args.device)
     suffix = "" if args.seed == 1 else f"_seed{args.seed}"
-    result_path = RESULT_OUT / f"height_candidate_fusion{suffix}.json"
+    result_path = args.output or RESULT_OUT / f"height_candidate_fusion{suffix}.json"
     report = json.loads(result_path.read_text()) if result_path.exists() else {}
+    overrides = parse_cache_overrides(args.cache_override)
+    selected_tags = list(args.tags)
+    report["_meta"] = {
+        "protocol": "raw-grid height candidate-source control",
+        "pool_k": args.pool_k,
+        "seed": args.seed,
+        "device": args.device,
+        "variants": list(args.variants or ("legacy240", "raw_height240", "height240", "height_density480")),
+        "cache_overrides": {
+            tag: {"path": str(path), "sha256": file_sha256(path)}
+            for tag, path in overrides.items()
+        },
+        "selected_tags": selected_tags,
+        "ground_truth": "clean cached poses; <5 m revisit after a 30-frame skip",
+        "interpretation": (
+            "Candidate-source and tuple-sensitivity control only. Any tuple selected "
+            "from these values must be selected on training tags before validation use."
+        ),
+    }
     for tag in args.tags:
         sensor, sequence, cache_path = JOBS[tag]
         print(f"\n=== {tag} ===", flush=True)
-        cache = np.load(REPO / cache_path)
+        resolved_cache_path = overrides.get(tag, REPO / cache_path)
+        cache = np.load(resolved_cache_path)
         d288 = bin288(cache["fft_magnitudes"].astype(np.float32))
         hc = height_cache(tag, sensor, sequence, cache, encoder)
         height = hc["height"].astype(np.float32)
@@ -399,6 +458,8 @@ def main():
                   f"best={vals[str(best_name)]:.4f} w={best_name} "
                   f"oracle={vals['oracle_union']:.4f}", flush=True)
         report[tag] = {"sensor": sensor, "sequence": sequence,
+                       "cache_path": str(resolved_cache_path),
+                       "cache_sha256": file_sha256(resolved_cache_path),
                        "pool_k": args.pool_k, "variants": variants}
         result_path.write_text(json.dumps(report, indent=2))
     print("HEIGHT_CANDIDATE_FUSION_DONE", flush=True)

@@ -3,12 +3,13 @@
 8-byte NCLT clouds. Scan contexts are built directly from the fixed loader at
 the corrected caches' keyframe scan_ids (the old contaminated values stand in
 Table 1 as the reference)."""
+import os
 import sys
 from pathlib import Path
 
 import numpy as np
 
-REPO = Path('/rise/RISE1/workspace/impl/NSD-paper')
+REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'src'))
 sys.path.insert(0, str(REPO / 'scripts'))
 
@@ -27,7 +28,7 @@ for tag, date, rel in CASES:
     cache = np.load(REPO / rel)
     sids = cache['scan_ids']
     poses = cache['poses']
-    loader = NCLTLoader('/rise/RISE1/workspace/data/nclt', date, lazy_load=True)
+    loader = NCLTLoader(str(Path(os.environ.get("NSD_DATA_ROOT", REPO / "data")) / "nclt"), date, lazy_load=True)
     scs, rks = [], []
     for i, s in enumerate(sids):
         if i % 1000 == 0:

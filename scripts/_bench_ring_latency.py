@@ -44,6 +44,7 @@ Writes results/ring_latency_bench.json and prints a table.
 from __future__ import annotations
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -52,6 +53,7 @@ import numpy as np
 import torch
 
 REPO = Path(__file__).resolve().parents[1]
+DATA_ROOT = os.environ.get("NSD_DATA_ROOT", str(REPO / "data"))
 RINGSHARP = REPO / "_external" / "RINGSharp"
 sys.path.insert(0, str(RINGSHARP))
 sys.path.insert(1, str(REPO))
@@ -117,7 +119,7 @@ def bench_ring_indexing(variant, dtype, seq, scan_ids):
     from glnet.utils.data_utils.point_clouds import generate_feats, generate_bev
     from torch_radon import ParallelBeam
 
-    loader = make_nsc_loader(dtype, seq, "/workspace/data")
+    loader = make_nsc_loader(dtype, seq, DATA_ROOT)
     ids = sample_ids(scan_ids, ENCODE_SAMPLE)
     angles = torch.FloatTensor(np.linspace(0, 2 * np.pi, GRID).astype(np.float32))
     radon = ParallelBeam(GRID, angles)
@@ -186,7 +188,7 @@ def build_specs_from_cache(variant, dtype, seq, scan_ids):
         assert len(bevs) == len(scan_ids), f"cache mismatch {cpath}"
     else:
         assert variant == "ring", f"missing BEV cache for {variant}: {cpath}"
-        loader = make_nsc_loader(dtype, seq, "/workspace/data")
+        loader = make_nsc_loader(dtype, seq, DATA_ROOT)
         bevs = np.zeros((len(scan_ids), 1, GRID, GRID), dtype=np.float16)
         for i, sid in enumerate(scan_ids):
             pts = np.ascontiguousarray(loader[int(sid)]["points"][:, :3], dtype=np.float32)
@@ -267,7 +269,7 @@ def load_ring_sharp(weight):
 def bench_rsl_indexing(model, dtype, seq, scan_ids):
     from glnet.datasets.nsc.nsc_dataset import make_nsc_loader, NSC_BOUNDS, NSC_X, NSC_Y, NSC_Z
     from glnet.utils.data_utils.point_clouds import generate_bev
-    loader = make_nsc_loader(dtype, seq, "/workspace/data")
+    loader = make_nsc_loader(dtype, seq, DATA_ROOT)
     ids = sample_ids(scan_ids, ENCODE_SAMPLE)
     for sid in ids[:3]:   # warmup
         pts = np.ascontiguousarray(loader[int(sid)]["points"][:, :3], dtype=np.float64)
@@ -305,7 +307,7 @@ def build_rsl_db(model, dtype, seq, scan_ids, batch=8):
     """Untimed DB prep: global desc (GPU), specs fp16 (GPU), packed occ (CPU)."""
     from glnet.datasets.nsc.nsc_dataset import make_nsc_loader, NSC_BOUNDS, NSC_X, NSC_Y, NSC_Z
     from glnet.utils.data_utils.point_clouds import generate_bev
-    loader = make_nsc_loader(dtype, seq, "/workspace/data")
+    loader = make_nsc_loader(dtype, seq, DATA_ROOT)
     n = len(scan_ids)
     glob = torch.zeros(n, 160, device=DEVICE)
     specs = None

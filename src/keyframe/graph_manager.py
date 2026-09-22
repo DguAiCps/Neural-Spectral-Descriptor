@@ -79,6 +79,58 @@ def _compute_multiscale_consistency(
     return float(1.0 - np.std(channel_sims))
 
 
+def _causal_prefix_candidates(
+    descs_normed: np.ndarray,
+    sequence_ids: np.ndarray,
+    gap: int,
+    fetch_k: int,
+):
+    """Per-node similarity candidates drawn from the same-sequence PREFIX only.
+
+    Causal candidate generation (pre-registered protocol,
+    docs/CAUSAL_PR_PREREGISTRATION.md §1.1): node i may only see candidates j
+    with (i - j) > gap inside its own sequence, and the top-k selection itself
+    is computed within that prefix — never by filtering a full-sequence search
+    (future frames must not occupy top-k slots, which would alter which past
+    candidates survive).
+
+    Numerics: one matrix-vector product per node (each similarity is an
+    independent row dot with a fixed K-accumulation order), so results are
+    bit-identical under sequence truncation — the prefix-invariance test of
+    the pre-registration holds at bit level, which blocked GEMM does not
+    guarantee (shape-dependent accumulation order). Deterministic; no
+    approximate index. Sequence blocks must be contiguous in node order
+    (asserted), which is how the batch builder concatenates sequences.
+
+    Returns (cand_idx, cand_sims): per-node arrays, similarity-descending.
+    """
+    n = len(descs_normed)
+    cand_idx = [np.empty(0, dtype=np.int64) for _ in range(n)]
+    cand_sims = [np.empty(0, dtype=np.float32) for _ in range(n)]
+    seq_arr = (np.zeros(n, dtype=np.int64) if sequence_ids is None
+               else np.asarray(sequence_ids))
+    change = np.flatnonzero(np.diff(seq_arr) != 0) + 1
+    starts = np.concatenate([[0], change])
+    ends = np.concatenate([change, [n]])
+    assert all(len(np.unique(seq_arr[s:e])) == 1 for s, e in zip(starts, ends))
+    for s0, s1 in zip(starts, ends):
+        s0 = int(s0)
+        for i in range(s0, int(s1)):
+            n_valid = i - gap - s0  # prefix = [s0, i-gap-1]
+            if n_valid <= 0:
+                continue
+            col = descs_normed[s0:s0 + n_valid] @ descs_normed[i]
+            k = min(fetch_k, n_valid)
+            if k < n_valid:
+                top = np.argpartition(-col, k - 1)[:k]
+            else:
+                top = np.arange(n_valid)
+            order = top[np.argsort(-col[top], kind="stable")]
+            cand_idx[i] = (order + s0).astype(np.int64)
+            cand_sims[i] = col[order].astype(np.float32)
+    return cand_idx, cand_sims
+
+
 def _build_similarity_edges(
     descriptors: np.ndarray,
     temporal_neighbor_sets: dict,
@@ -98,6 +150,8 @@ def _build_similarity_edges(
     multiscale_min_consistency: float = 0.0,
     similarity_metric: str = 'cosine',
     standardization_stats=None,
+    similarity_causal: bool = False,
+    causal_gap: int = 0,
 ) -> List[Tuple[int, int, float, float, float]]:
     """
     Build similarity edges using Bayesian posterior or cosine threshold.
@@ -155,6 +209,85 @@ def _build_similarity_edges(
     norms = np.linalg.norm(descs_f32, axis=1, keepdims=True)
     norms = np.maximum(norms, 1e-8)
     descs_normed = descs_f32 / norms
+
+    if similarity_causal:
+        # === Causal mode (pre-registered, docs/CAUSAL_PR_PREREGISTRATION.md §1.1):
+        # candidates generated from each node's same-sequence prefix only
+        # (j <= i - causal_gap - 1), emitted past -> current as (j, i).
+        # Supports exactly the configurations of the two deployed call sites:
+        # bayesian/cosine/density-prior (training graph) and threshold/cosine
+        # (eval graph); everything else is rejected loudly.
+        bayesian_c = similarity_dist is not None and similarity_dist.fitted
+        if (channel_splits is not None and len(channel_splits) > 1
+                and multiscale_min_consistency > 0):
+            raise ValueError("similarity_causal does not support multiscale filtering")
+        if similarity_metric != 'cosine':
+            raise ValueError("similarity_causal supports similarity_metric='cosine' only")
+        if min_k_global > 0:
+            raise ValueError("similarity_causal does not support similarity_min_k > 0")
+        if bayesian_c and prior_signal != 'density':
+            raise ValueError("similarity_causal supports prior_signal='density' only")
+        fetch_c = max(max_k_global, density_k if bayesian_c else 0)
+        cand_idx, cand_sims = _causal_prefix_candidates(
+            descs_normed, sequence_ids, int(causal_gap), fetch_c)
+        edges = []
+        if bayesian_c:
+            # Per-node density from the node's OWN prefix (k_eff = min(k, |prefix|)).
+            # The density->prior mapping (median-centred sigmoid) is calibrated over
+            # the node population of this build; the only bayesian caller is the
+            # OFFLINE training graph, so these are train-split constants — the
+            # pre-registered causal-legal alternative. The eval path always runs
+            # the threshold branch below.
+            densities = np.array([float(s[:density_k].mean()) if len(s) else np.nan
+                                  for s in cand_sims])
+            have = ~np.isnan(densities)
+            priors = np.full(n_nodes, base_prior, dtype=np.float64)
+            if have.any():
+                priors[have] = similarity_dist.compute_adaptive_priors(
+                    densities[have], base_prior=base_prior, beta=density_beta)
+            threshold_c = max(
+                similarity_dist.confidence_threshold(confidence_level, prior=base_prior),
+                similarity_threshold)
+            logger.info(
+                f"Causal bayesian similarity edges: gap={causal_gap}, "
+                f"floor_sim={threshold_c:.6f}, density from per-node prefix")
+            for i in range(n_nodes):
+                max_k_i = int(max_k_by_node[i])
+                if max_k_i <= 0 or len(cand_idx[i]) == 0:
+                    continue
+                prior_i = float(priors[i])
+                taken = 0
+                for j, obs in zip(cand_idx[i], cand_sims[i]):
+                    obs = float(obs)
+                    if obs < threshold_c:
+                        break  # descending order; min_k=0 semantics
+                    post = float(similarity_dist.posterior(obs, prior=prior_i))
+                    if post < confidence_level:
+                        continue
+                    l2 = float(np.linalg.norm(descs_f32[i] - descs_f32[int(j)]))
+                    edges.append((int(j), i, obs, l2, post))  # past -> current
+                    taken += 1
+                    if taken >= max_k_i:
+                        break
+        else:
+            logger.info(
+                f"Causal threshold similarity edges: gap={causal_gap}, "
+                f"floor_sim={similarity_threshold:.6f}")
+            for i in range(n_nodes):
+                max_k_i = int(max_k_by_node[i])
+                if max_k_i <= 0 or len(cand_idx[i]) == 0:
+                    continue
+                taken = 0
+                for j, obs in zip(cand_idx[i], cand_sims[i]):
+                    obs = float(obs)
+                    if obs < similarity_threshold:
+                        break
+                    l2 = float(np.linalg.norm(descs_f32[i] - descs_f32[int(j)]))
+                    edges.append((int(j), i, obs, l2, 1.0))  # past -> current
+                    taken += 1
+                    if taken >= max_k_i:
+                        break
+        return edges
 
     # Over-fetch to compensate for temporal exclusion + self
     max_temporal = max((len(s) for s in temporal_neighbor_sets.values()), default=0)
@@ -1226,6 +1359,7 @@ def build_graph_from_keyframes_batch(
     sequence_ids: np.ndarray = None,
     temporal_edge_mode: str = 'bidirectional',
     temporal_direction_mode: str = 'none',
+    similarity_causal: bool = False,
 ) -> Data:
     """
     O(n) batch graph construction with temporal + similarity edges.
@@ -1291,6 +1425,16 @@ def build_graph_from_keyframes_batch(
             f"Unknown temporal_direction_mode={temporal_direction_mode!r}; "
             f"expected one of {sorted(valid_direction_modes)}"
         )
+    if similarity_causal:
+        # Pre-registered full-causal mode: every edge must satisfy src < dst.
+        if temporal_edge_mode != 'past_to_current':
+            raise ValueError(
+                "similarity_causal=True requires temporal_edge_mode="
+                "'past_to_current' (full causal graph)")
+        if loop_closures:
+            raise ValueError(
+                "verified loop-closure edges are disabled in causal mode "
+                "(their emission is explicitly bidirectional)")
 
     # 1. Extract all features at once - O(n)
     features = torch.stack([
@@ -1386,6 +1530,8 @@ def build_graph_from_keyframes_batch(
             multiscale_min_consistency=multiscale_min_consistency,
             similarity_metric=similarity_metric,
             standardization_stats=standardization_stats,
+            similarity_causal=similarity_causal,
+            causal_gap=half_window,
         )
         for src, dst, cos_sim, l2, posterior in sim_edges:
             edges.append([src, dst])
@@ -1437,6 +1583,7 @@ def build_graph_from_keyframes_batch(
         graph.sequence_ids = torch.from_numpy(np.asarray(sequence_ids)).long().to(device)
     graph.temporal_edge_mode = temporal_edge_mode
     graph.temporal_direction_mode = temporal_direction_mode
+    graph.similarity_causal = similarity_causal
 
     return graph
 

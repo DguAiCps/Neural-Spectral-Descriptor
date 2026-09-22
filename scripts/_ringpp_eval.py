@@ -36,6 +36,7 @@ import numpy as np
 import torch
 
 REPO = Path(__file__).resolve().parents[1]
+DATA_ROOT = os.environ.get("NSD_DATA_ROOT", str(REPO / "data"))
 RINGSHARP = REPO / "_external" / "RINGSharp"
 sys.path.insert(0, str(RINGSHARP))
 sys.path.insert(1, str(REPO))
@@ -64,7 +65,7 @@ def load_cache(dtype, seq):
 def _worker_init(dtype, seq):
     global _W_LOADER, _W_VARIANT
     from glnet.datasets.nsc.nsc_dataset import make_nsc_loader
-    _W_LOADER = make_nsc_loader(dtype, seq, "/workspace/data")
+    _W_LOADER = make_nsc_loader(dtype, seq, DATA_ROOT)
 
 
 def _bev_one(args):

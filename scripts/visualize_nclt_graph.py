@@ -244,7 +244,7 @@ def main():
         gt = Path("/workspace/data/nclt/ground_truth/2012-01-08.csv")
         datasets['NCLT 2012-01-08'] = load_nclt_poses(gt)
     if args.dataset in ('town01', 'both'):
-        gt = Path("/workspace/data/helipr/Town01/Town01/LiDAR_GT/Velodyne_gt.txt")
+        gt = Path("/workspace/data/helipr/Town01/LiDAR_GT/Velodyne_gt.txt")
         datasets['HeLiPR Town01'] = load_helipr_poses(gt)
 
     n = len(datasets)

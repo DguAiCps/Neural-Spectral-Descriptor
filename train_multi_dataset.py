@@ -142,6 +142,21 @@ def load_config(config_path):
         return yaml.safe_load(f)
 
 
+def apply_data_root(config, data_root):
+    """Override dataset roots with one portable root directory."""
+    root = Path(data_root)
+    relative_roots = {
+        'kitti': root / 'kitti' / 'dataset',
+        'nclt': root / 'nclt',
+        'helipr': root / 'helipr',
+        'mulran': root / 'mulran',
+    }
+    for split in ('train', 'val', 'test'):
+        for dataset_cfg in config['data']['datasets'].get(split, []):
+            dataset_cfg['root'] = str(relative_roots[dataset_cfg['type']])
+    return config
+
+
 def apply_encoder_preset(config, preset):
     """Apply compact closed-form encoder presets shared with fast KITTI eval."""
     enc = config['encoding']
@@ -477,6 +492,9 @@ def main():
                         help='Path to config file')
     parser.add_argument('--checkpoint-dir', type=str, default='src/checkpoints',
                         help='Directory to save checkpoints')
+    parser.add_argument('--data-root', type=str,
+                        default=os.environ.get('NSD_DATA_ROOT', 'data'),
+                        help='Dataset root containing kitti/, nclt/, helipr/, and mulran/')
     parser.add_argument('--validate-only', action='store_true',
                         help='Load best_model.pth and run validation only (no training)')
     parser.add_argument('--dump-per-query-dir', type=str, default=None,
@@ -503,6 +521,15 @@ def main():
                         help='Enable learned alpha gate on GAT context output')
     parser.add_argument('--gate-initial-alpha', type=float, default=None,
                         help='Initial sigmoid alpha for learned context gate')
+    parser.add_argument('--temporal-edge-mode', choices=(
+        'bidirectional', 'past_to_current', 'future_to_current'), default=None,
+        help='Override graph temporal-edge mode (used by supplementary causal retraining)')
+    parser.add_argument('--temporal-direction-mode', choices=('none', 'signed_distance'),
+                        default=None, help='Override graph temporal direction encoding')
+    parser.add_argument('--similarity-causal', action='store_true', default=None,
+                        help='Causal similarity edges: candidates from the '
+                             'same-sequence prefix only, emitted past->current '
+                             '(pre-registered causal retraining)')
     args = parser.parse_args()
 
     # Setup
@@ -537,7 +564,8 @@ def main():
 
     # Load config
     logging.info(f"Loading configuration from: {config_path}")
-    config = apply_encoder_preset(load_config(config_path), args.encoder_preset)
+    config = apply_data_root(load_config(config_path), args.data_root)
+    config = apply_encoder_preset(config, args.encoder_preset)
     if args.encoder_preset != 'full':
         logging.info(f"Applied encoder preset: {args.encoder_preset}")
         if args.resume_checkpoint is None:
@@ -551,6 +579,13 @@ def main():
             "Enabled learned context gate "
             f"(initial_alpha={config['gnn'].get('gate_initial_alpha', 0.5)})"
         )
+    graph_cfg = config['keyframe'].setdefault('graph', {})
+    if args.temporal_edge_mode is not None:
+        graph_cfg['temporal_edge_mode'] = args.temporal_edge_mode
+    if args.temporal_direction_mode is not None:
+        graph_cfg['temporal_direction_mode'] = args.temporal_direction_mode
+    if args.similarity_causal:
+        graph_cfg['similarity_causal'] = True
 
     # Log config summary
     logging.info(f"  n_elevation: {config['encoding']['n_elevation']}")
@@ -810,7 +845,9 @@ def main():
                         logging.info(f"    Loaded from cache: {len(keyframes)} keyframes ({ds_name})")
                     else:
                         keyframe_selector.reset()
-                        seq_path = os.path.join(root, seq, seq)
+                        seq_path = os.path.join(root, seq)
+                        if not os.path.isdir(os.path.join(seq_path, "LiDAR")):
+                            seq_path = os.path.join(root, seq, seq)  # legacy double-nested layout
                         try:
                             loader = HeLiPRLoader(seq_path, lazy_load=True)
                             keyframes = process_dataset(
@@ -976,7 +1013,9 @@ def main():
                         logging.info(f"    Loaded from cache: {len(keyframes)} keyframes ({ds_name})")
                     else:
                         keyframe_selector.reset()
-                        seq_path = os.path.join(root, seq, seq)
+                        seq_path = os.path.join(root, seq)
+                        if not os.path.isdir(os.path.join(seq_path, "LiDAR")):
+                            seq_path = os.path.join(root, seq, seq)  # legacy double-nested layout
                         try:
                             loader = HeLiPRLoader(seq_path, lazy_load=True)
                             keyframes = process_dataset(
@@ -1066,6 +1105,7 @@ def main():
     similarity_exclude_temporal = graph_config.get('similarity_exclude_temporal', True)
     temporal_edge_mode = graph_config.get('temporal_edge_mode', 'bidirectional')
     temporal_direction_mode = graph_config.get('temporal_direction_mode', 'none')
+    similarity_causal = graph_config.get('similarity_causal', False)
     # Component ablation: keep only one edge type after graph construction
     # ('both' = no-op default; 'temporal_only' / 'similarity_only').
     edge_type_filter = graph_config.get('edge_type_filter', 'both')
@@ -1237,6 +1277,7 @@ def main():
             sequence_ids=train_sequence_ids,
             temporal_edge_mode=temporal_edge_mode,
             temporal_direction_mode=temporal_direction_mode,
+            similarity_causal=similarity_causal,
             **bayesian_config,
         )
     train_graph = attach_sensor_metadata(train_graph, train_sensor_ids, train_beam_counts, device)
@@ -1334,6 +1375,7 @@ def main():
                 standardization_stats=standardization_stats,
                 temporal_edge_mode=temporal_edge_mode,
                 temporal_direction_mode=temporal_direction_mode,
+                similarity_causal=similarity_causal,
                 **bayesian_config,
             )
             graph = attach_sensor_metadata(

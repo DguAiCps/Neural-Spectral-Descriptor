@@ -6,7 +6,8 @@ import json
 import statistics
 from pathlib import Path
 
-R = Path('/rise/RISE1/workspace/impl/NSD-paper/results/height_sota')
+REPO = Path(__file__).resolve().parents[1]
+R = REPO / "results" / "height_sota"
 TRAIN = ['K01_TR', 'K02_TR', 'K06_TR', 'K07_TR', 'N0511_TR', 'N0804_TR']
 VAL9 = ['K00', 'K05', 'K08', 'N12', 'N13', 'TOWN', 'DCC', 'KAI', 'RIV']
 VAL8 = [t for t in VAL9 if t != 'TOWN']

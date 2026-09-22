@@ -70,9 +70,10 @@ sys.path.insert(2, str(REPO / "scripts"))  # _seqot_prepare / _seqot_eval
 SEQS = [("kitti", "05", "KITTI_05"), ("kitti", "00", "KITTI_00"),
         ("mulran", "KAIST03", "MulRan_KAIST03"), ("nclt", "2012-01-08", "NCLT_2012-01-08")]
 CACHE_KEYS = {"kitti": "056e0a02", "nclt": "056e0a02", "mulran": "33919e6e"}
-DATA_ROOTS = {"kitti": "/workspace/data/kitti/dataset",
-              "nclt": "/workspace/data/nclt",
-              "mulran": "/workspace/data/mulran"}
+DATA_ROOT = Path(os.environ.get("NSD_DATA_ROOT", REPO / "data"))
+DATA_ROOTS = {"kitti": str(DATA_ROOT / "kitti" / "dataset"),
+              "nclt": str(DATA_ROOT / "nclt"),
+              "mulran": str(DATA_ROOT / "mulran")}
 ENCODE_SAMPLE = 150
 QUERY_SAMPLE = 100
 QUERY_WARMUP = 10

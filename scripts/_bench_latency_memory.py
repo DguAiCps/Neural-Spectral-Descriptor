@@ -57,8 +57,10 @@ RVEC = REPO / "artifacts/key_remetrize_r.npy"
 CLS = REPO / "artifacts/edge_classifier.pt"
 CKPT = REPO / "checkpoints/800d_4sensor_20260511_161726/best_model.pth"
 OUT = None  # set below once N_COARSE is known
-DATA_ROOTS = {"kitti": "/workspace/data/kitti/dataset", "nclt": "/workspace/data/nclt",
-              "mulran": "/workspace/data/mulran"}
+DATA_ROOT = Path(os.environ.get("NSD_DATA_ROOT", REPO / "data"))
+DATA_ROOTS = {"kitti": str(DATA_ROOT / "kitti" / "dataset"),
+              "nclt": str(DATA_ROOT / "nclt"),
+              "mulran": str(DATA_ROOT / "mulran")}
 BEV_DIRS = {"kitti": "preprocessed_kitti_bev_layout", "nclt": "preprocessed_nclt_bev_layout",
             "helipr": "preprocessed_helipr_bev_layout", "mulran": "preprocessed_mulran_bev_layout"}
 SEQS = [("kitti", "05", "KITTI_05"), ("kitti", "00", "KITTI_00"),

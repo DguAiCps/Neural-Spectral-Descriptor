@@ -7,10 +7,11 @@
 # Usage:  bash scripts/_bench_baseline_latency.sh
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DATA_ROOT="${NSD_DATA_ROOT:?set NSD_DATA_ROOT to the directory containing the datasets}"
 
 docker run --rm --gpus all --cpus 6 --memory 12g --shm-size 8g \
   -v "$REPO":/workspace/Neural-Spectral-Codec \
-  -v /mnt/d/NSD_datasets:/workspace/data \
+  -v "$DATA_ROOT":/workspace/data \
   -w /workspace/Neural-Spectral-Codec \
   nvcr.io/nvidia/pyg:26.01-py3 \
   sh -c 'python scripts/_bench_baseline_latency.py --methods bevplace seqot; s=$?; \

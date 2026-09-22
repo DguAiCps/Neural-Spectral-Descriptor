@@ -15,11 +15,8 @@ from __future__ import annotations
 import json, sys
 from pathlib import Path
 import numpy as np
-import torch, yaml
 
 REPO = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO / "src")); sys.path.insert(0, str(REPO / "scripts"))
-from evaluate_kitti_checkpoint import _apply_encoder_preset, _make_model, _build_eval_graph, _cache_to_keyframes
 
 CACHE = REPO / "data/preprocessed_cross_sensor_operating"
 CKPTS = {
@@ -30,7 +27,6 @@ CKPTS = {
 SENSORS = {"kitti": ["00", "05", "08"], "nclt": ["2012-01-08", "2013-01-10"],
            "helipr": ["Town01"], "mulran": ["DCC03", "KAIST03", "Riverside03"]}
 DTH, SKIP, EPS, GAMMA = 5.0, 30, 0.1, 25.0
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def norm(X):
@@ -82,7 +78,10 @@ def summarize(bp, nd, dyaw, dgeo):
     fwd = dyaw <= 30.0; rev = dyaw > 90.0
     def med(x): return float(np.median(x)) if len(x) else float("nan")
     return {
-        "n_query": n, "R@1": round(1 - nmiss / max(n, 1), 4),
+        "n_query": n, "n_miss": nmiss,
+        "n_collision_miss": int(alias_dom.sum()),
+        "collision_miss_%_of_queries": round(100 * int(alias_dom.sum()) / max(n, 1), 4),
+        "R@1": round(1 - nmiss / max(n, 1), 4),
         "sameplace_med": round(med(bp), 4),
         "SpreadRate_%": round(100 * float(np.mean(bp > EPS)), 2),
         "near_distractor_med": round(med(nd), 4),
@@ -96,9 +95,22 @@ def summarize(bp, nd, dyaw, dgeo):
 
 
 def main():
+    import torch
+    import yaml
+
+    sys.path.insert(0, str(REPO / "src"))
+    sys.path.insert(0, str(REPO / "scripts"))
+    from evaluate_kitti_checkpoint import (
+        _apply_encoder_preset,
+        _build_eval_graph,
+        _cache_to_keyframes,
+        _make_model,
+    )
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     cfg = _apply_encoder_preset(yaml.safe_load(open(REPO / "configs/training_multi_dataset.yaml")), "no_interdiff")
     cfg["gnn"]["use_residual_gate"] = True; cfg["gnn"]["gate_initial_alpha"] = 0.0625
-    models = {s: _make_model(cfg, c, DEVICE) for s, c in CKPTS.items() if c.exists()}
+    models = {s: _make_model(cfg, c, device) for s, c in CKPTS.items() if c.exists()}
 
     report = {}
     for sensor, seqs in SENSORS.items():
@@ -114,10 +126,10 @@ def main():
             for s, model in models.items():
                 graph = _build_eval_graph(
                     keyframes=_cache_to_keyframes(cache), poses=poses, descriptors=desc, cache=cache,
-                    config=cfg, device=DEVICE, temporal_edge_mode="bidirectional",
+                    config=cfg, device=device, temporal_edge_mode="bidirectional",
                     temporal_direction_mode="none", similarity_min_k=0, phase_features=None, sensor_key=sensor)
                 with torch.no_grad():
-                    emb = model(graph.to(DEVICE)).detach().cpu().numpy()
+                    emb = model(graph.to(device)).detach().cpu().numpy()
                 per_seed.append(summarize(*analyze(norm(emb), poses)))
             keys = per_seed[0].keys()
             fin = {k: round(float(np.mean([ps[k] for ps in per_seed])), 4) for k in keys}
@@ -127,7 +139,30 @@ def main():
                   f"SpreadRate={raw['SpreadRate_%']:.1f}/{fin['SpreadRate_%']:.1f}% "
                   f"R@1={raw['R@1']:.3f}/{fin['R@1']:.3f} "
                   f"miss:spread{raw['of_miss_spread_%']:.0f}%/alias{raw['of_miss_alias_%']:.0f}%", flush=True)
+    raw_queries = sum(v["raw288"]["n_query"] for v in report.values())
+    raw_collision = sum(v["raw288"]["n_collision_miss"] for v in report.values())
+    key_queries = sum(v["key416"]["n_query"] for v in report.values())
+    key_collision = sum(v["key416"]["n_collision_miss"] for v in report.values())
+    report["_aggregate"] = {
+        "raw288": {
+            "n_query": raw_queries,
+            "n_collision_miss": raw_collision,
+            "collision_miss_%_of_queries": round(100 * raw_collision / raw_queries, 4),
+        },
+        "key416_3seed_mean": {
+            "n_query": key_queries,
+            "n_collision_miss": round(key_collision, 4),
+            "collision_miss_%_of_queries": round(100 * key_collision / key_queries, 4),
+        },
+    }
     (REPO / "results/_verify_samespread.json").write_text(json.dumps(report, indent=2))
+    print(
+        "pooled absolute collision miss: "
+        f"{report['_aggregate']['raw288']['collision_miss_%_of_queries']:.4f}%"
+        " -> "
+        f"{report['_aggregate']['key416_3seed_mean']['collision_miss_%_of_queries']:.4f}%",
+        flush=True,
+    )
     print("WROTE results/_verify_samespread.json")
 
 

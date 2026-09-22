@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Dict, List
@@ -142,7 +143,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--use-gated-context", action="store_true")
     parser.add_argument("--gate-initial-alpha", type=float, default=0.0625)
-    parser.add_argument("--root", default="/workspace/data/mulran")
+    parser.add_argument("--root", default=os.environ.get("NSD_MULRAN_ROOT", "data/mulran"))
     parser.add_argument("--sequences", nargs="+", default=["DCC03", "KAIST03", "Riverside03"])
     parser.add_argument("--cache-dir", default="data/preprocessed_mulran_checkpoint_eval")
     parser.add_argument("--bev-cache-dir", default="data/preprocessed_mulran_bev_layout")

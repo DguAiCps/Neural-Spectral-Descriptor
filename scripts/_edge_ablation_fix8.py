@@ -14,7 +14,7 @@ import sys
 import numpy as np
 import torch
 
-REPO = Path('/rise/RISE1/workspace/impl/NSD-paper')
+REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'src'))
 sys.path.insert(0, str(REPO / 'scripts'))
 
@@ -22,9 +22,9 @@ from _height_candidate_fusion import (
     JOBS, CACHE_OUT, bin288, l2, minmax, keyframes_from, make_model,
     column_align_bank, column_align_scores,
 )
-from _pbev_branch_fusion import variant_inputs
+from _pbev_branch_fusion import pbev_cache, variant_inputs
 from evaluate_kitti_checkpoint import _build_eval_graph
-from run_kitti_operating_point import _find_queries, _normalize, _topk_cosine
+from run_kitti_operating_point import _find_queries, _make_encoder, _normalize, _topk_cosine
 from build_and_train_edge_classifier import edge_features, range_phase_flat
 
 VAL9 = ['K00', 'K05', 'K08', 'N12', 'N13', 'TOWN', 'DCC', 'KAI', 'RIV']
@@ -117,10 +117,16 @@ for seed in (1, 2, 3):
         sensor, sequence, cache_path = JOBS[tag]
         cache = np.load(REPO / cache_path)
         d288 = bin288(cache['fft_magnitudes'].astype(np.float32))
-        hc = np.load(CACHE_OUT / f'{tag}_pbev.npz')
+        pc_path = CACHE_OUT / f'{tag}_pbev.npz'
+        pc = (np.load(pc_path) if pc_path.exists()
+              else pbev_cache(tag, sensor, sequence, cache, _make_encoder(cfg, device)))
+        hc = pc
         sk = hc['sk_re'].astype(np.float32) + 1j * hc['sk_im'].astype(np.float32)
         hkey, _, _, colbank = variant_inputs(sk, 8)
-        layouts = np.load(CACHE_OUT / f'{tag}_height120.npz')['nsd_layout'].astype(np.float32)
+        if 'nsd_layout' in hc.files:
+            layouts = hc['nsd_layout'].astype(np.float32)
+        else:
+            layouts = np.load(CACHE_OUT / f'{tag}_height120.npz')['nsd_layout'].astype(np.float32)
         embs = embeddings_three_ways(cache, sensor, d288, layouts, cfg, model,
                                      clf, clf_blob, device)
         rec = {}

@@ -4,14 +4,23 @@ This repository does not redistribute KITTI, NCLT, HeLiPR, or MulRan. The
 release archive is code-only; point the configs or runner environment variables
 at local dataset copies.
 
-## Default Server Paths
+## Portable Dataset Root
 
-| Dataset | Default root | Sensor key | Beam count | Validation split |
+Set `NSD_DATA_ROOT` to a directory containing the four dataset folders. Paper
+scripts default to `./data` when it is unset; training also accepts an explicit
+`--data-root /path/to/datasets`, which overrides the historical roots embedded
+in old YAML files.
+
+```bash
+export NSD_DATA_ROOT=/absolute/path/to/NSD_datasets
+```
+
+| Dataset | Relative path below data root | Sensor key | Beam count | Validation split |
 | --- | --- | --- | ---: | --- |
-| KITTI | `/rise/RISE1/workspace/data/kitti/dataset` | `kitti` | 64 | `00`, `05`, `08` |
-| NCLT | `/rise/RISE1/workspace/data/nclt` | `nclt` | 32 | `2012-01-08`, `2013-01-10` |
-| HeLiPR | `/workspace/data/helipr` | `helipr` | 16 | `Town01` |
-| MulRan | `/workspace/data/mulran` | `mulran` | 64 | `DCC03`, `KAIST03`, `Riverside03` |
+| KITTI | `kitti/dataset` | `kitti` | 64 | `00`, `05`, `08` |
+| NCLT | `nclt` | `nclt` | 32 | `2012-01-08`, `2013-01-10` |
+| HeLiPR | `helipr` | `helipr` | 16 | `Town01` |
+| MulRan | `mulran` | `mulran` | 64 | `DCC03`, `KAIST03`, `Riverside03` |
 
 ## Sensor Elevation Ranges
 

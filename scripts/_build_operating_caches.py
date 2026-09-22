@@ -2,17 +2,18 @@
 """Build evaluator-native operating caches for the sequences that lack them
 (KITTI 00/05/08 with the evaluator's own builder; MulRan DCC03/KAIST03/
 Riverside03 via a loader-swapped call to the same builder)."""
+import os
 import sys
 from pathlib import Path
 
-REPO = Path('/rise/RISE1/workspace/impl/NSD-paper')
+REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'src'))
 sys.path.insert(0, str(REPO / 'scripts'))
 
 import run_kitti_operating_point as op
 from data.mulran_loader_old import MulRanLoader
 
-ROOT = Path('/rise/RISE1/workspace/data')
+ROOT = Path(os.environ.get("NSD_DATA_ROOT", REPO / "data"))
 config = op._load_config(REPO / 'configs/training_multi_dataset.yaml')
 
 for seq in ('00', '05', '08'):
