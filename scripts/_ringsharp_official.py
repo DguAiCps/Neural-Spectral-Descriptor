@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""RING#-L on split v2: official code, paper values where paper and code differ.
+"""RING#-L on split v2 with the public official code and its default behaviour.
 
 Official code: lus6-Jenny/RINGSharp (_external/RINGSharp, upstream cd55367;
 our branch nsc-integration only adds the 'nsc' data adapter, portability
 fixes, two upstream trainer bug fixes and math-preserving memory patches —
 logs/baseline_official_20261011/ring_family.md lists every commit).
 
-Training (glnet/config/config_nclt.txt with the paper's lr / weight decay):
-30 epochs, Adam lr 1e-3, weight decay 1e-4 (paper; config 1e-4 / 1e-5),
-MultiStepLR milestone 20 (gamma 0.1), batch 16
+Training (official recipe, glnet/config/config_nclt.txt): 30 epochs, Adam
+lr 1e-4, weight decay 1e-5, MultiStepLR milestone 20 (gamma 0.1), batch 16
 (batch_size_limit 32 with expansion rate 1.0 = no expansion), aug_mode 3,
 xyz_aug, model config ring_sharp_l_nsc.txt (= ring_sharp_l_nclt.txt except
 the model name).  Data: the existing split-v2 training tuples
@@ -20,19 +19,11 @@ required to fit 16 GB; on a 96 GB card NSC_MICRO_BATCH=1 runs the
 upstream full-batch step.  Training runs the official tools/train.py
 unchanged (runpy) after scripts/_ringsharp_band.install().
 
-Paper values (project rule 2026-10-11: where the RING# paper, arXiv
-2409.00206v2, and the code differ, the paper wins and the code line is
-disclosed): Adam lr 1e-3 and weight decay 1e-4 (Sec. VI-B; code
-glnet/config/config_nclt.txt:14,18 has 1e-4 / 1e-5); sinogram angles over
-[0, 2pi) (scripts/_ringsharp_band.compute_spec_paper; code
-ring_sharp_l.py:114); translation branch over ALL candidates (Eq. 38; the
-README evaluation command uses --n_rerank 1000).
-
-Retrieval (tools/evaluate_ours_gl.py logic at the paper depth, i.e. its
-n_rerank = database size case): rotation branch (estimate_yaw, batches of
-128) gives every candidate its rotation; the translation branch
-(rotate_bev_batch at yaw and yaw - pi, solve_translation, element-wise min
-of the two errors) scores every candidate; top-1 = the translation minimum.  Per test query t
+Retrieval (official depth, tools/evaluate_ours_gl.py with the README flag
+--n_rerank 1000): rotation branch (estimate_yaw, batches of 128) ranks ALL
+candidates by 1 - score; the first 1000 are re-ordered by the translation
+branch (rotate_bev_batch at yaw and yaw - pi, solve_translation, element-wise
+min of the two errors); top-1 = the translation minimum.  Per test query t
 the candidates are every keyframe j <= t - 30 (past only).  The translation
 errors come from trans_errors_exact, a vectorized copy of solve_translation's
 error line (its per-candidate python loop computes the same
@@ -44,7 +35,7 @@ Checkpoint selection: the official trainer has no rule (it saves every
 epoch and *_final.pth = last epoch).  We keep the split-v2 rule used before:
 highest validation family-macro 5 m R@1 (queries pooled within a sensor
 family, families weighted equally, ties -> earlier epoch), now over epochs
-1-30 and with the paper retrieval depth; the protocol of that number is
+1-30 and with the official retrieval depth; the protocol of that number is
 unchanged (GT keyframes, revisit < 5 m, |i - j| > 30, baselines/eval_utils).
 
 BEV (decision 2026-10-11): official generate_bev, 160x160x20 grid, +-70 m,
@@ -94,7 +85,7 @@ WDIR = RS_TOOLS / "results/weights" / EXP
 VAL_DIR = rol.OUT_ROOT / "ringsharp_val"
 VAL_BEV = rol.CACHE_ROOT / "ringsharp_val_bev"
 SEL = rol.OUT_ROOT / "ringsharp_ckpt_selection.json"
-N_RERANK = 0             # 0 = every candidate (RING# paper Eq. 38); README uses 1000
+N_RERANK = 1000          # README: evaluate_ours_gl.py --n_rerank 1000
 XCHECK_MAX = 512         # candidates re-scored with the solve_translation loop per check
 BATCH = 128              # evaluate_ours_gl.py rank / rerank batch
 FEAT_BATCH = 8
@@ -116,14 +107,11 @@ batch_expansion_th = 0.7
 save_freq = 1
 eval_freq = 1
 
-# RING# paper Sec. VI-B: Adam, lr 1e-3, weight decay 1e-4, batch 16,
-# 30 epochs (paper value; official config_nclt.txt has lr 1e-4, weight
-# decay 1e-5). Milestone and aug_mode: not in the paper, official values.
-lr = 1e-3
+lr = 1e-4
 epochs = 30
 scheduler_milestones = 20
 aug_mode = 3
-weight_decay = 1e-4
+weight_decay = 1e-5
 
 # split-v2 training tuples (KITTI 01/02/05/06 + HeLiPR Bridge01-04, GT
 # keyframes, positives 25 m / non-negatives 50 m), built by
@@ -172,15 +160,8 @@ def cmd_prep():
         "train_manifest": json.loads((PICKLES / "manifest.json").read_text()),
         "exp_name": EXP,
         "env": {"NSC_MICRO_BATCH": "2 by default (16 GB); 1 = upstream full batch"},
-        "paper_overrides": {
-            "lr": "1e-3 (RING# arXiv 2409.00206v2 Sec. VI-B; config_nclt.txt:14 has 1e-4)",
-            "weight_decay": "1e-4 (Sec. VI-B; config_nclt.txt:18 has 1e-5)",
-            "sinogram_angles": ("160 over [0, 2pi) (Sec. IV-C Eq. 11; ring_sharp_l.py:114 "
-                                "includes 2pi) via scripts/_ringsharp_band.compute_spec_paper"),
-            "retrieval_depth": "translation branch over every candidate (Eq. 38; README 1000)",
-            "same_as_paper": "Adam, batch 16, 30 epochs, positives 25 m, loss weights "
-                             "lambda_r = lambda_t = 1, BEV 160x160x20 over 140 m (0.875 m)",
-            "not_in_paper_official_kept": "scheduler milestone 20, aug_mode 3 + xyz_aug"},
+        "rule": ("public official code with its default behaviour (config_nclt.txt, "
+                 "README --n_rerank 1000); only protocol-required and run-only changes"),
         "bev_bounds_per_sensor": {k: rol.ringsharp_bounds(k) for k in rol.DATASET_TABLE},
         "bev_bounds_source": ("scripts/_ring_official_lib.DATASET_TABLE via "
                               "scripts/_ringsharp_band.NSCBandTrainingDataset "
@@ -234,8 +215,6 @@ def epoch_weight(e: int) -> Path:
 # ------------------------------------------------------- official functions
 def _base():
     import _ringsharp_eval as base   # glnet imports, load_model (e2cnn check)
-    import _ringsharp_band
-    _ringsharp_band.install_model()  # paper angle grid in RINGSharpL.compute_spec
     return base
 
 
@@ -415,9 +394,7 @@ def cmd_val(epoch, seq, official_loop):
         "sensor": s, "sequence": q, "epoch": epoch, "n_frames": len(scan_ids),
         "n_queries": n_q, **{f"recall@{k}": recalls[k] for k in (1, 5, 10)},
         "weight": str(w), "weight_sha256": _sha_file(w),
-        "retrieval": ("rotation branch then translation branch over "
-                      + ("every candidate (paper Eq. 38)" if N_RERANK <= 0
-                         else f"the rotation top {N_RERANK}")),
+        "retrieval": f"exhaustive rotation ranking -> translation rerank of top {N_RERANK}",
         "translation_errors": "solve_translation loop" if official_loop else "trans_errors_exact",
         "translation_xcheck": xcheck,
         "protocol": "revisit<5m, |i-j|>30, intra-sequence (baselines/eval_utils), GT keyframes",
@@ -514,9 +491,9 @@ def cmd_select(epochs):
     SEL.write_text(json.dumps({
         "rule": ("highest split-v2 validation family-macro 5 m R@1 (queries "
                  "pooled within a sensor family, families weighted equally) "
-                 f"over epochs {epochs[0]}-{epochs[-1]}, paper retrieval depth "
-                 "(translation branch over every candidate, RING# Eq. 38); "
-                 "ties -> earlier epoch. The official trainer has "
+                 f"over epochs {epochs[0]}-{epochs[-1]}, official retrieval depth "
+                 "(exhaustive rotation ranking -> translation rerank of top "
+                 f"{N_RERANK}, README); ties -> earlier epoch. The official trainer has "
                  "no selection rule (it keeps every epoch and *_final = last)."),
         "selected_epoch": best, "selected_weight": str(w), "weight_sha256": _sha_file(w),
         "official_final_epoch": f"e{EPOCHS}",
@@ -618,11 +595,10 @@ def cmd_dump(cond, seq, official_loop, overwrite):
     meta = {
         "schema": "pr-dump-v1", "method": "ringsharp", "sensor": s, "sequence": q,
         "condition": cond, "n_frames": n, "n_queries": nq,
-        "min_index_gap": MIN_INDEX_GAP, "n_rerank": N_RERANK or "all", "batch": BATCH,
-        "retrieval": ("paper depth (RING# Eq. 38; evaluate_ours_gl.py n_rerank = "
-                      "database size): rotation then translation branch for every "
-                      "keyframe j <= t - 30; top-1 = translation minimum"),
-        "sinogram_angles": "160 over [0, 2pi) (paper; overrides ring_sharp_l.py:114)",
+        "min_index_gap": MIN_INDEX_GAP, "n_rerank": N_RERANK, "batch": BATCH,
+        "retrieval": ("official depth (evaluate_ours_gl.py, README --n_rerank 1000): "
+                      "rotation branch ranks every keyframe j <= t - 30, translation "
+                      "branch re-orders the first min(1000, |prefix|)"),
         "translation_errors": "solve_translation loop" if official_loop else "trans_errors_exact",
         "translation_xcheck": xcheck,
         "score_direction": {
@@ -694,8 +670,10 @@ def cmd_check():
     assert rep["ledger_schema"]["reference_arrays_present_same_dtype"]
     assert np.array_equal(arrays["query_idx"], np.arange(30, 90))
     print("  ledger", rep["ledger_schema"], flush=True)
-    # 3. paper angle grid in RINGSharpL.compute_spec (CPU, radon stubbed)
-    rep["paper_angle_grid"] = _check_paper_angles(base)
+    # 3. official model code untouched (no compute_spec override)
+    from glnet.models.localizer.ring_sharp_l import RINGSharpL
+    assert RINGSharpL.compute_spec.__module__ == "glnet.models.localizer.ring_sharp_l"
+    rep["official_compute_spec"] = True
     # 3b. per-sensor band in val / test BEVs (CPU, real scans)
     rep["bev_band"] = _check_band(base)
     # 4. the training connector uses the band per sample
@@ -734,38 +712,6 @@ def _vox_reference(pts, bounds, Z=20, Y=160, X=160):
     occ[idx[:, 2], idx[:, 1], idx[:, 0]] = 1
     occ[0, 0, 0] = 0
     return occ.transpose(0, 2, 1)
-
-
-def _check_paper_angles(base):
-    import torch
-    import _ringsharp_band as rb
-    from glnet.models.localizer.ring_sharp_l import RINGSharpL
-    assert RINGSharpL.compute_spec is rb.compute_spec_paper, "patch not installed"
-    seen = {}
-
-    class _Beam:  # stand-in for torch_radon.ParallelBeam (CUDA only)
-        def __init__(self, det, angles):
-            seen["angles"] = angles.numpy().astype(np.float64)
-
-        def forward(self, x):
-            return x
-
-    class _M:
-        forward_row_fft = staticmethod(lambda s: (s, s))
-
-    orig, rb.ParallelBeam = rb.ParallelBeam, _Beam
-    try:
-        RINGSharpL.compute_spec(_M(), torch.zeros(1, 1, 160, 160))
-    finally:
-        rb.ParallelBeam = orig
-    paper = np.degrees(seen["angles"])
-    code = np.degrees(np.linspace(0, 2 * np.pi, 160).astype(np.float32).astype(np.float64))
-    out = {"paper_step_deg": float(np.diff(paper).mean()), "paper_last_deg": float(paper[-1]),
-           "code_ring_sharp_l_py_114_step_deg": float(np.diff(code).mean()),
-           "code_last_deg": float(code[-1])}
-    assert abs(out["paper_step_deg"] - 2.25) < 1e-4 and abs(out["paper_last_deg"] - 357.75) < 1e-3
-    print("  paper angles", out, flush=True)
-    return out
 
 
 def _check_band(base):

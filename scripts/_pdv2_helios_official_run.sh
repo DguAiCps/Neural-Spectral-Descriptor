@@ -37,7 +37,7 @@ O="python3 scripts/_helios_official_overlap.py"
 T="python3 scripts/_helios_official_train.py"
 D="python3 scripts/_helios_official_dump.py"
 NPROC=${NPROC:-12}
-TRAIN_SPACING=${TRAIN_SPACING:-5}     # paper 5 m (code distanceThreshold 3 m); 0 = every keyframe
+TRAIN_SPACING=${TRAIN_SPACING:-3}     # official toolbox distanceThreshold; 0 = every keyframe
 DESKEW=${DESKEW:-helipr}              # helipr | none
 CHOSEN=${CHOSEN:-val_best}            # val_best | official_best
 mkdir -p "$LOG"

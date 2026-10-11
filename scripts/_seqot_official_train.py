@@ -27,23 +27,22 @@ Official code (_external/SeqOT @ OFFICIAL_COMMIT, unmodified, imported):
   --selftest runs the official trainHandler classes unmodified on CPU on a
   small real set and checks that this driver gives bit-identical weights.
 
-Recipe -- user decision 2026-10-11: where code and paper differ, the paper
-(the overridden code lines are listed at LR1 ... NEG_RULE and in run meta):
-  phase 1  featureExtracter(seqL=3), Adam lr 5e-6 (paper; code 5e-7),
-           StepLR(5, 0.9) per epoch, epochs 1..20 (paper; code 1..99), one
-           anchor per step: 1 + 6 positives + 6 negatives (paper; code 3 + 3),
-           positive overlap > 0.3, negative = every other pair (paper; code
-           < 0.3 with 0.3 skipped), triplet_loss(margin 0.5, use_min=False,
-           lazy=False), past 3-scan windows of raw scans (paper III-A; code
-           centred), checkpoint every epoch
-  phase 2  gen_sub_descriptors (past 3-scan window, filled with the scan
-           itself when it leaves the sequence, N + 1 rows with a zero last
-           row) with the selected phase-1 weights, then GeM (p init 3), Adam
-           lr 5e-5 (paper; code 5e-6), StepLR(5, 0.9), epochs 1..20, 1 + 6 + 6,
-           past 20-window
-  code     the code settings (CODE) are what --selftest checks bit for bit
-           against the official classes
+Recipe -- the official code's actual behaviour (user rule 2026-10-11):
+  phase 1  featureExtracter(seqL=3), Adam lr 5e-7 (config.yml:20), StepLR(5,
+           0.9) per epoch, epochs 1..99 (range(1, 100)), one anchor per step:
+           1 + 3 positives + 3 negatives (overlap > 0.3 / < 0.3, 0.3 skipped),
+           triplet_loss(margin 0.5, use_min=False, lazy=False), centred 3-scan
+           windows of raw scans, checkpoint every epoch
+  phase 2  official gen_sub_descriptors (centred 3-scan window, filled with
+           the centre scan when it leaves the sequence, N + 1 rows with a zero
+           last row) with the selected phase-1 weights, then GeM (p init 3),
+           Adam lr 5e-6 (config.yml:44), StepLR(5, 0.9), 99 epochs, 1 + 6 + 6,
+           centred 20-window
+  paper    differs (lr 5e-6 / 5e-5, 20 epochs, 6 + 6, past windows); not used
   seed     1 for torch / numpy / random (the official code sets none)
+  The released weights agree on GeM lr (pretrained_gem.pth.tar initial_lr
+  5e-6, epoch 15); the released phase-1 checkpoint (epoch 12, lr 1e-6 since a
+  restart) matches neither code nor paper, so the code value stays.
 
 Selection (not in the official code, which saves every epoch and has no
 rule): split-v2 VAL GT keyframes, per sequence R@1 at 5 m over all keyframes
@@ -100,17 +99,16 @@ OVERLAP_THRESH = 0.3        # training_seqot.py:51, training_gem.py:54; paper II
 MARGIN_1 = 0.5              # training_seqot.py:152, training_gem.py:155; paper alpha
 STEP_SIZE, GAMMA = 5, 0.9   # StepLR, training_seqot.py:47, training_gem.py:45; paper "0.9 every 5"
 RADIUS, SKIP = 5.0, 30      # VAL R@1 (compute_recall_multi_k defaults)
-# Recipe (user decision 2026-10-11): where code and paper differ, the paper.
-#                     paper (default)                      code (overridden line)
-LR1, LR2 = 5e-6, 5e-5        # paper IV-A                 config.yml:20 5e-7, :44 5e-6
-EPOCHS1 = EPOCHS2 = 21       # loop bound -> epochs 1..20  training_seqot.py:54 / training_gem.py:57 100 (1..99)
-USE1 = (6, 6)                # paper Npos = Nneg = 6      training_seqot.py:116-117 (3, 3)
-USE2 = (6, 6)                # same in code               training_gem.py:120-121
-TRAIN_WINDOW = "trailing"    # paper III-A past windows   read_samples.py:20,71-72,99 centred
-NEG_RULE = "le"              # paper III-C: not > 0.3 ->  read_samples.py:65-68: < 0.3, == 0.3 skipped
-#                              negative
-# The code values, used by --selftest against the official classes:
-CODE = dict(lr1=5e-7, lr2=5e-6, epochs=100, use1=(3, 3), use2=(6, 6), window="centered", neg="lt")
+# Recipe = the official code's actual behaviour (user rule 2026-10-11; the
+# paper differs: lr 5e-6 / 5e-5, 20 epochs, Npos = Nneg = 6, past windows).
+LR1, LR2 = 5e-7, 5e-6        # config.yml:20, :44
+EPOCHS1 = EPOCHS2 = 100      # training_seqot.py:54, training_gem.py:57 -> epochs 1..99
+USE1 = (3, 3)                # training_seqot.py:116-117
+USE2 = (6, 6)                # training_gem.py:120-121
+TRAIN_WINDOW = "centered"    # read_samples.py:20,71-72,99 (training may read future scans;
+#                              evaluation uses trailing windows, see trailing_final_descriptors)
+NEG_RULE = "lt"              # read_samples.py:62-68: < 0.3 negative, == 0.3 skipped
+CODE = dict(lr1=LR1, lr2=LR2, epochs=100, use1=USE1, use2=USE2, window=TRAIN_WINDOW, neg=NEG_RULE)
 # checkpoint selection and the reported ledger: official L2 (user decision); cosine is recorded
 METRIC = os.environ.get("SEQOT_SELECT_METRIC", "l2")
 LOG_EVERY = 1000
@@ -375,16 +373,10 @@ def _plan_meta(plan, n_seq):
 
 
 def _recipe_meta(phase):
-    return {"recipe": "paper (user decision 2026-10-11: paper over code)",
-            "code_values_overridden": {
-                "lr": "config.yml:20 5e-7" if phase == 1 else "config.yml:44 5e-6",
-                "epochs": ("training_seqot.py:54" if phase == 1 else "training_gem.py:57")
-                          + " epochs=100 -> 1..99",
-                "use_pos_neg": "training_seqot.py:116-117 (3, 3)" if phase == 1 else "same (6, 6)",
-                "window": "read_samples.py:20,71-72,99 centred -> paper III-A past window",
-                "negative": "read_samples.py:65-68 (< 0.3; == 0.3 skipped) -> paper: not > 0.3",
-                "overlap": "com_overlap_yaw.py:102-103 count/valid(cur) -> paper Eq. 13 "
-                           "count/min(valid(cur), valid(ref))"}}
+    return {"recipe": "official code defaults (user rule 2026-10-11)",
+            "paper_differs": {"lr": "5e-6" if phase == 1 else "5e-5", "epochs": 20,
+                              "use_pos_neg": "(6, 6)", "window": "past (III-A)",
+                              "overlap": "Eq. 13 min(valid) denominator"}}
 
 
 def cmd_train1(epochs, lr, smoke):
@@ -649,12 +641,11 @@ def cmd_subdesc(batch):
         src = StoreSource("train", s, q)
         t0 = time.time()
         des = np.zeros((src.n_raw // 1 + 1, 256))
-        des[:src.n_raw] = sub_descriptors(fe, src, np.arange(src.n_raw), dev, batch, TRAIN_WINDOW)
+        des[:src.n_raw] = sub_descriptors(fe, src, np.arange(src.n_raw), dev, batch, "centered")
         np.save(out_dir / f"{seq_name(s, q)}.tmp.npy", des.astype("float32"))
         os.replace(out_dir / f"{seq_name(s, q)}.tmp.npy", out)
         print(f"OK subdesc {s}/{q}: {src.n_raw} scans in {time.time() - t0:.0f} s", flush=True)
-    _write_json(out_dir / "meta.json", {"stage1": c, "windows": f"{TRAIN_WINDOW} (paper III-A; "
-                                        "code gen_sub_descriptors centred)",
+    _write_json(out_dir / "meta.json", {"stage1": c, "windows": "centered (official gen_sub_descriptors)",
                                         "rows": "n_raw + 1, last row zero (official)"})
 
 
@@ -1100,47 +1091,6 @@ def selftest_resume(rep, td):
     return case["resume_equal"] and case["lr_equal"]
 
 
-def selftest_paper(rep, td):
-    """Paper-recipe pieces that have no official class to compare with:
-    (1) a past-window training batch == the code's centred batch of the
-    previous scan (the network sees the same scans); (2) the negative rule
-    (paper: every non-positive pair, incl. overlap == 0.3; code: 0.3 skipped)
-    and the past-window skip (a window reaching before scan 0); (3) one
-    6 + 6 training step on CPU (time, memory)."""
-    import torch
-    from _pd_build_test_caches import _make_loader
-    L = _make_loader("kitti", "06")
-    src = DictSource({r: range_image("kitti", L[r]["points"]) for r in range(40)})
-    a, pos, neg = 10, [12, 15, 20], [30, 35, 39]
-    b_tr = stage1_batch(src, a, pos, neg, "trailing")
-    b_ce = stage1_batch(src, a - 1, [x - 1 for x in pos], [x - 1 for x in neg], "centered")
-    case = {"trailing_batch_eq_shifted_centred": bool(np.array_equal(b_tr, b_ce))}
-    f1 = np.array([10, 10, 10, 10, 1, 1], np.int64)
-    f2 = np.array([12, 20, 30, 35, 5, 30], np.int64)
-    ov = np.array([0.8, 0.3, 0.1, 0.0, 0.9, 0.0])
-    ok = lambda d, x: all(src.exists(int(y)) for y in trailing(x, SEQL))  # noqa: E731
-    p_paper = anchor_plan([(f1, f2, ov)], ok, 6, 6, neg_rule="le")
-    p_code = anchor_plan([(f1, f2, ov)], lambda d, x: True, 6, 6, neg_rule="lt")
-    case["paper_plan"] = [(x[1], x[2], x[3]) for x in p_paper]
-    case["code_plan"] = [(x[1], x[2], x[3]) for x in p_code]
-    good = case["paper_plan"] == [(10, [12], [35, 30, 20])] and \
-        case["code_plan"] == [(10, [12], [35, 30]), (1, [5], [30])]
-    case["rules_ok"] = bool(good)
-    # (3) one paper-recipe step (1 + 6 + 6 windows of 3 scans)
-    big = DictSource({r: range_image("kitti", L[r]["points"]) for r in range(0, 60)})
-    plan = [(0, 20, [22, 24, 26, 28, 30, 32], [50, 52, 54, 56, 58, 59])]
-    t0 = time.time()
-    with contextlib.redirect_stdout(io.StringIO()):
-        seed_all()
-        _, losses = train_phase("seqot", plan, [big], td / "paper1", LR1, 2, torch.device("cpu"),
-                                start_epoch=0, quiet=True)
-    case["one_step_6p6n_cpu_s"] = round(time.time() - t0, 1)
-    case["loss_finite"] = bool(np.isfinite(losses[1][0]))
-    rep["paper"] = case
-    print("paper", json.dumps(case), flush=True)
-    return case["trailing_batch_eq_shifted_centred"] and case["rules_ok"] and case["loss_finite"]
-
-
 def selftest_recall(rep):
     """Exhaustive R@1 == compute_recall_multi_k where the latter's top-61
     shortlist cannot bind (unstructured descriptors: the 61 nearest are never
@@ -1180,8 +1130,6 @@ def cmd_selftest(parts, out_json):
             ok &= selftest_resume(rep, td)
         if "descriptors" in parts:
             ok &= selftest_descriptors(rep, td)
-        if "paper" in parts:
-            ok &= selftest_paper(rep, td)
     st = _git("status", "--porcelain", check=False)
     rep["official_clone_status"] = st.splitlines()
     rep["all_ok"] = bool(ok)
@@ -1198,9 +1146,8 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("train1")
-    p.add_argument("--epochs", type=int, default=EPOCHS1,
-                   help="loop bound: 21 -> epochs 1..20 (paper); code 100 -> 1..99")
-    p.add_argument("--lr", type=float, default=None, help="default paper 5e-6 (code config.yml:20 5e-7)")
+    p.add_argument("--epochs", type=int, default=EPOCHS1, help="official loop bound (100 -> epochs 1..99)")
+    p.add_argument("--lr", type=float, default=None, help="default config.yml:20 5e-7")
     p.add_argument("--smoke", type=int, default=0)
     p = sub.add_parser("select1")
     p.add_argument("--follow", action="store_true")
@@ -1208,8 +1155,8 @@ def main():
     p = sub.add_parser("subdesc")
     p.add_argument("--batch", type=int, default=1, help="1 = official gen_sub_descriptors")
     p = sub.add_parser("train2")
-    p.add_argument("--epochs", type=int, default=EPOCHS2, help="loop bound: 21 -> epochs 1..20 (paper)")
-    p.add_argument("--lr", type=float, default=None, help="default paper 5e-5 (code config.yml:44 5e-6)")
+    p.add_argument("--epochs", type=int, default=EPOCHS2, help="official loop bound (100 -> epochs 1..99)")
+    p.add_argument("--lr", type=float, default=None, help="default config.yml:44 5e-6")
     p = sub.add_parser("select2")
     p.add_argument("--batch", type=int, default=64)
     p = sub.add_parser("smoke")
@@ -1217,8 +1164,7 @@ def main():
     p.add_argument("--keyframes", type=int, default=300)
     p.add_argument("--batch", type=int, default=64)
     p = sub.add_parser("selftest")
-    p.add_argument("--parts", nargs="+",
-                   default=["recall", "train1", "train2", "resume", "descriptors", "paper"])
+    p.add_argument("--parts", nargs="+", default=["recall", "train1", "train2", "resume", "descriptors"])
     p.add_argument("--out-json", type=Path, default=None)
     a = ap.parse_args()
     if a.cmd == "train1":

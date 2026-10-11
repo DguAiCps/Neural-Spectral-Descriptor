@@ -7,10 +7,8 @@ Pipeline (scripts/_ring_official_lib.py docstring has the provenance):
         generate_bev_occ (RING, 1x120x120) / generate_bev_feats (RING++,
         6x120x120)), 1000-keyframe shards under
         _external/ring_official_cache/{cond}/{sensor}_{seq}/
-  dump  one test sequence -> TIRING per keyframe (RING repo generate_RING
-        with the paper angle grid, _ring_official_lib.generate_ring_paper:
-        120 angles over [0, 2pi) instead of utils/core.py:153's 0..2pi
-        inclusive) and the causal ledger: for every query t >= 30 the
+  dump  one test sequence -> official TIRING per keyframe (RING repo
+        generate_RING) and the causal ledger: for every query t >= 30 the
         normalized circular correlation (RING repo batch_circorr, dist =
         1 - score) against EVERY keyframe j <= t - 30; top-1 = argmin dist.
         Scoring uses the exact per-frame hoist of batch_circorr
@@ -165,8 +163,7 @@ def bev_shards(cond, sensor, seq, variant, scan_ids):
 
 # ----------------------------------------------------------------- dump stage
 def tiring_bank(core, shards, n, c):
-    """generate_RING per keyframe with the paper angle grid
-    (_ring_official_lib.generate_ring_paper) -> (n, C, 120, 120) float32 CPU."""
+    """Official generate_RING per keyframe -> (n, C, 120, 120) float32 CPU."""
     import torch
     bank = torch.empty((n, c, 120, 120), dtype=torch.float32)
     i = 0
@@ -174,7 +171,7 @@ def tiring_bank(core, shards, n, c):
         for bevs in shards:
             for b in bevs:
                 x = torch.from_numpy(b.astype(np.float32)).to(DEVICE)
-                _, ti = rol.generate_ring_paper(x)
+                _, ti = core.generate_RING(x)
                 bank[i] = ti.reshape(c, 120, 120).float().cpu()
                 i += 1
     assert i == n, (i, n)
@@ -257,10 +254,8 @@ def cmd_dump(cond, seq, variants, official_scorer, overwrite):
             "pipeline": ("official RING repo (lus6-Jenny/RING @ "
                          f"{rol.RING_COMMIT}): read_pc -> normalize_pc -> "
                          + ("generate_bev_occ" if v == "ring" else "generate_bev_feats")
-                         + " -> generate_RING with the paper angle grid (120 angles "
-                           "over [0, 2pi), 3 deg; overrides utils/core.py:153 "
-                           "linspace(0, 2pi, 120)) -> batch_circorr (dist = 1 - "
-                           "score), exhaustive over the prefix j <= t - 30"),
+                         + " -> generate_RING -> batch_circorr (dist = 1 - score), "
+                           "exhaustive over the prefix j <= t - 30"),
             "dataset_table_row": rol.DATASET_TABLE[sensor],
             "scorer": ("official batch_circorr" if official_scorer else
                        "exact per-frame hoist of batch_circorr "
@@ -450,24 +445,11 @@ def _check_timing(rep):
     rep["cpu_timing_ringpp_features"] = tim
 
 
-def _check_angles(rep):
-    """Paper angle grid vs the code line it overrides (no radon on CPU)."""
-    paper = np.degrees(rol.ring_angles_paper(120).astype(np.float64))
-    code = np.degrees(np.linspace(0, 2 * np.pi, 120).astype(np.float32).astype(np.float64))
-    out = {"paper_step_deg": float(np.diff(paper).mean()), "paper_last_deg": float(paper[-1]),
-           "code_core_py_153_step_deg": float(np.diff(code).mean()),
-           "code_core_py_153_last_deg": float(code[-1])}
-    assert abs(out["paper_step_deg"] - 3.0) < 1e-4 and abs(out["paper_last_deg"] - 357.0) < 1e-3
-    print("  angles", out, flush=True)
-    rep["angle_grid"] = out
-
-
 def cmd_check():
     rep = {"_meta": {"date": time.strftime("%Y-%m-%d %H:%M"),
                      "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
                      "dataset_table": rol.DATASET_TABLE}}
-    for f in (_check_angles, _check_preprocessing, _check_scorer, _check_ledger_schema,
-              _check_timing):
+    for f in (_check_preprocessing, _check_scorer, _check_ledger_schema, _check_timing):
         print(f"[check] {f.__name__}", flush=True)
         f(rep)
     p = rol.OUT_ROOT / "check_ring_official_cpu.json"
@@ -490,7 +472,7 @@ def cmd_gpu_check():
             with torch.no_grad():
                 occ = core.generate_bev_occ(pcn).cpu().numpy()[0]
                 feat = core.generate_bev_feats(pcn).cpu().numpy()
-                _, ti = rol.generate_ring_paper(torch.from_numpy(occ[None].astype(np.float32)).cuda())
+                _, ti = core.generate_RING(torch.from_numpy(occ[None].astype(np.float32)).cuda())
             r = {"sensor": sensor, "seq": q, "occ_equal_cpu_transcription":
                  bool(np.array_equal(occ.astype(np.uint8), rol.occupancy_numpy(pcn))),
                  "feat_shape": list(feat.shape), "feat_finite": bool(np.isfinite(feat).all()),

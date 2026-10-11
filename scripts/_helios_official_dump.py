@@ -174,7 +174,7 @@ def cmd_select(chosen: str, device: str):
     vb = max(cands, key=lambda e: (e["family_macro_r1"], -e["epoch"]))
     ob = next(e for e in cands if "HeLiOS_default_trainning_best.pth" in e["aliases"])
     sel["_meta"] = {"rule_official_best": "official trainer: highest validation-phase TruncatedSmoothAP "
-                                          "statistic on validation.pickle (Roundabout01, 5 m keyframes, "
+                                          "statistic on validation.pickle (Roundabout01, 3 m keyframes, "
                                           "overlap labels), trainer.py:333-336",
                     "rule_val_best": "split-v2 VAL (9 sequences, all keyframes) intra-sequence 5 m R@1, "
                                      "30-keyframe gap, families equal (_pdv2_c3._family_pooled), "

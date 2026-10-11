@@ -40,18 +40,9 @@ translated up by Z_SHIFT = +2 m: the official filter then keeps 0..18 m
 above the sensor (same 18 m width, same 2 m layers relative to the shifted
 origin).  This shift is OUR rule, not an official setting.
 
-Paper over code (user rule 2026-10-11: where the RA-L paper and the code
-differ, the paper value is used and the overridden code line is disclosed):
-  RANGE_M = 80   paper Sec. IV-A "within 80m far"; code generator:109-110
-                 |x|, |y| < 70 and x/70, y/70 (1.75 m rings) -> 80, 2 m rings
-  1 m layers     paper Sec. IV-B "discretizes the height 20m with 20 layers";
-                 code generator:110 z/20 into the kernel's 20 layers over
-                 [-20, 20] m = 2 m layers (kernel.cu:51, 70) -> z_up/10 - 1, so
-                 the unchanged kernel puts layer k = floor(z_up / 1 m), 0..19
-                 (z_up after Z_SHIFT; kept band 2 < z_up < 20 as in the code)
-Both are applied in `official_filter` (our adapter); the official files are
-unchanged.  `official_filter(..., mode="code")` reproduces the code exactly
-and is what the selftest compares with the official function.
+Code over paper (user rule 2026-10-11, final): the official code's actual
+values are used where the paper differs (70 m range, 2 m layers over
+[-20, 20] m; the paper's 80 m / "20 m with 20 layers" are not applied).
 
 Layout: one packed store per role and sequence
   _external/disco_official_pdv2/polar/{role}/{sensor}_{seq}/
@@ -117,15 +108,12 @@ NBYTES = int(np.prod(SHAPE)) // 8     # 12000
 # Literal official rule for every sensor (see module docstring).
 Z_SHIFT = {"kitti": 2.0, "kitti360": 2.0, "helipr": 0.0, "mulran": 0.0,
            "nclt": 0.0, "mcd": 0.0}
-RANGE_M = 80.0     # paper; code 70 (generator:109-110)
-CODE_RANGE_M = 70.0
-RULE = ("generate_training_tuples_baseline_with_pose.load_lidar_file_nclt with the "
-        "paper values: |x|<80, |y|<80 (code 70), 2 < z_up < 20 (official "
-        "-20 < z_raw < -2), not(|x|<1 and |y|<1); [x/80, y/80, z_up/10 - 1] "
-        "(code [x/70, y/70, z_up/20]) -> 2 m rings, 1 m layers over 0-20 m (code "
-        "1.75 m rings, 2 m layers over -20..20 m); load_pc_file: gputransform "
-        "20x40x120 occupancy; cloud translated by Z_SHIFT before the filter: +2 m "
-        "for kitti/kitti360 (0 < z_up < 18, our rule), 0 otherwise")
+RULE = ("generate_training_tuples_baseline_with_pose.load_lidar_file_nclt: "
+        "|x|<70, |y|<70, 2 < z_up < 20 (official -20 < z_raw < -2), "
+        "not(|x|<1 and |y|<1); [x/70, y/70, z_up/20]; load_pc_file: "
+        "gputransform 20x40x120 occupancy (1.75 m rings, 3 deg, 2 m layers over "
+        "-20..20 m); cloud translated by Z_SHIFT before the filter: +2 m for "
+        "kitti/kitti360 (0 < z_up < 18, our rule), 0 otherwise")
 
 # Heading (radians) of the LiDAR about the world vertical axis, only for the
 # TRAIN sequences: train_DiSCO.py rotates each positive by
@@ -294,19 +282,13 @@ def official_hits(sensor: str, points: np.ndarray) -> np.ndarray:
     return official_filter(official_points(sensor, points))
 
 
-def official_filter(p: np.ndarray, mode: str = "paper") -> np.ndarray:
-    """load_lidar_file_nclt lines 105-114 on float64 (x, y, z_up).
-    mode "code": the official lines exactly (70 m, z/20 -> 2 m layers);
-    mode "paper": RANGE_M = 80 m and z_up/10 - 1 (1 m layers over 0-20 m)."""
-    assert mode in ("paper", "code"), mode
-    r = RANGE_M if mode == "paper" else CODE_RANGE_M
+def official_filter(p: np.ndarray) -> np.ndarray:
+    """load_lidar_file_nclt lines 105-114 on float64 (x, y, z_up)."""
     x, y, z = p[:, 0], p[:, 1], -p[:, 2]          # official raw frame: z down
-    keep = (np.abs(x) < r) & (z > -20.) & (z < -2.) & (np.abs(y) < r) & \
+    keep = (np.abs(x) < 70.) & (z > -20.) & (z < -2.) & (np.abs(y) < 70.) & \
         ~((np.abs(x) < 1.) & (np.abs(y) < 1.))
-    hits = np.stack([x[keep] / r, y[keep] / r, z[keep] / 20.], axis=1)
+    hits = np.stack([x[keep] / 70., y[keep] / 70., z[keep] / 20.], axis=1)
     hits[:, 2] = -hits[:, 2]
-    if mode == "paper":
-        hits[:, 2] = -z[keep] / 10. - 1.           # z_up in (2, 20) -> (-0.8, 1)
     return hits
 
 
@@ -562,31 +544,6 @@ def _best_shift(a: np.ndarray, b: np.ndarray) -> int:
     return int(np.argmax(corr))
 
 
-def _paper_layout_ok(p, hits, fake, cfg, tol=1e-3) -> bool:
-    """Paper mode through the unchanged kernel (CPU transcription): occupied
-    (layer, ring) pairs match {(floor(z_up / 1 m), min(floor(r / 2 m), 39))}
-    of the kept points; points within `tol` m of a layer / ring edge may fall
-    on either side (the kernel works in float32)."""
-    x, y, z = p[:, 0], p[:, 1], -p[:, 2]
-    keep = (np.abs(x) < RANGE_M) & (z > -20.) & (z < -2.) & (np.abs(y) < RANGE_M) & \
-        ~((np.abs(x) < 1.) & (np.abs(y) < 1.))
-    if len(hits) != int(keep.sum()):
-        return False
-    if len(hits) == 0:
-        return True
-    zu, r = p[keep, 2], np.hypot(x[keep], y[keep])
-    gap = RANGE_M / 40
-    ring_of = lambda v: np.minimum(np.floor(v / gap).astype(int), 39)  # noqa: E731
-    l_lo, l_hi = np.floor(zu - tol).astype(int), np.floor(zu + tol).astype(int)
-    r_lo, r_hi = ring_of(r - tol), ring_of(r + tol)
-    sure = (l_lo == l_hi) & (r_lo == r_hi)
-    possible = {(int(a), int(b)) for la, lb, ra, rb in zip(l_lo, l_hi, r_lo, r_hi)
-                for a in (la, lb) for b in (ra, rb)}
-    certain = {(int(a), int(b)) for a, b in zip(l_lo[sure], r_lo[sure])}
-    got = {(int(a), int(b)) for a, b, _ in np.argwhere(official_polar(hits, fake, cfg) > 0)}
-    return certain <= got <= possible and l_lo.min() >= 1 and l_hi.max() <= 19
-
-
 def cmd_selftest(n_scans: int, out_json: Path | None):
     """CPU only.
     1. reader: for each of six sensors, n_scans keyframes (after Z_SHIFT)
@@ -622,25 +579,20 @@ def cmd_selftest(n_scans: int, out_json: Path | None):
                 # family); the adapter's filter must then equal it exactly
                 deq = _write_nclt_bin(f, official_points(sensor, pts))
                 off = ns["load_lidar_file_nclt"](str(f))
-                ours = official_filter(deq, mode="code")
-                hp = official_hits(sensor, pts)
-                paper_ok = _paper_layout_ok(official_points(sensor, pts), hp, fake, cfg)
+                ours = official_filter(deq)
+                if not Z_SHIFT[sensor]:   # grid points: same result through official_hits
+                    assert np.array_equal(ours, official_hits(sensor, deq))
                 same = off.shape == ours.shape and np.array_equal(off, ours)
                 img_off = ns["load_pc_file"](str(f))
                 img_ours = official_polar(ours, fake, cfg)
                 same_img = np.array_equal(img_off, img_ours)
                 case = {"role": role, "seq": f"{sensor}/{seq}", "scan_id": sid,
-                        "z_shift": Z_SHIFT[sensor], "hits_code": int(len(ours)),
-                        "occupied_code": int(img_ours.sum()),
-                        "hits_equal": bool(same), "image_equal": bool(same_img),
-                        "hits_paper": int(len(hp)),
-                        "occupied_paper": int(official_polar(hp, fake, cfg).sum()),
-                        "paper_layout_ok": bool(paper_ok)}
-                same &= paper_ok
+                        "z_shift": Z_SHIFT[sensor], "hits": int(len(ours)),
+                        "occupied": int(img_ours.sum()),
+                        "hits_equal": bool(same), "image_equal": bool(same_img)}
                 if sensor == "nclt":
                     raw = ns["load_lidar_file_nclt"](str(loader.frame_files[sid]))
-                    h2 = official_filter(official_points("nclt", loader[sid]["points"]),
-                                         mode="code")
+                    h2 = official_hits("nclt", loader[sid]["points"])
                     case["nclt_raw_hits_equal"] = bool(raw.shape == h2.shape
                                                        and np.array_equal(raw, h2))
                     case["nclt_raw_image_equal"] = bool(np.array_equal(

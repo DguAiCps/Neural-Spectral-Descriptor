@@ -29,10 +29,9 @@ tools/utils/com_overlap_yaw.com_overlap_yaw):
     current frame with the GT poses (LiDAR frame), count =
     #(|r_ref - r_cur| < 1.2 on valid reference pixels) (com_overlap_yaw.py:
     57-104; the yaw column is not used by the index and is not computed);
-    overlap = count / min(#valid current, #valid reprojected reference)
-    (paper Eq. 13, OVERLAP_FORMULA 'paper', user decision 2026-10-11) or
-    count / #valid current (code, com_overlap_yaw.py:102-103, used only to
-    check against the official script);
+    overlap = count / #valid current (com_overlap_yaw.py:102-103, the
+    default 'code'); 'paper' = count / min(#valid current, #valid
+    reprojected reference) (Eq. 13) exists but is not used;
   * EXACT shortcut (not an approximation): when the pose distance exceeds
     80 m + the largest point range of the reference scan (+1 m margin), no
     reference point can land inside the 80 m projection, the reference image
@@ -139,11 +138,10 @@ SHORTCUT_MARGIN = 1.0  # m, see module docstring
 BINS = [(0.7, 1.1, 15000), (0.5, 0.7, 15000), (0.3, 0.5, 15000),
         (0.1, 0.3, 30000), (0.0, 0.1, 30000)]
 LONG_TERM = (1000, 0.3, 10000)   # |raw i - raw j| > 1000 and overlap > 0.3
-# Overlap normalisation (user decision 2026-10-11: paper over code): paper
-# Eq. 13 divides by min(valid(R_i), valid(R'_j)); the code
-# (com_overlap_yaw.py:102-103) by valid(R_i).  'code' is kept for the
-# selftest against the official script.
-OVERLAP_FORMULA = os.environ.get("SEQOT_OVERLAP_FORMULA", "paper")
+# Overlap normalisation: the code (com_overlap_yaw.py:102-103) divides by
+# valid(R_i) -- used (user rule 2026-10-11: official code behaviour); paper
+# Eq. 13 divides by min(valid(R_i), valid(R'_j)) ('paper', not used).
+OVERLAP_FORMULA = os.environ.get("SEQOT_OVERLAP_FORMULA", "code")
 # every-5th frames of NCLT 2012-01-08 (28,127 scans), the sequence behind the
 # official 115,000-row index; `labels --scale density` multiplies the drawn
 # counts by M / OFFICIAL_M (same rows per frame as the official index)
@@ -386,18 +384,10 @@ def cmd_config():
             assert k in cfg[sec], (sec, k)
             cfg[sec][k] = v
             changed.append(f"{sec}.{k}")
-    # user decision 2026-10-11: paper values where code and paper differ
-    paper = {("training_seqot", "lr"): 5e-6, ("training_gem", "lr"): 5e-5}
-    code_vals = {f"{a}.{b}": cfg[a][b] for a, b in paper}
-    for (a, b), v in paper.items():
-        cfg[a][b] = v
     WORK.mkdir(parents=True, exist_ok=True)
-    head = (f"# SeqOT config.yml @ {OFFICIAL_COMMIT}: path entries changed for split v2\n"
-            f"# paths: {', '.join(changed)}\n"
-            f"# paper values (user decision 2026-10-11) replace the code values {code_vals};\n"
-            "# the other paper-over-code changes (epochs 20, Npos=Nneg=6, past windows,\n"
-            "# negative rule, Eq. 13 overlap) live in the drivers, not in this file.\n"
-            "# height, width, seqlen, resume: official values\n")
+    head = (f"# SeqOT config.yml @ {OFFICIAL_COMMIT} with only the path entries "
+            f"changed for split v2\n# changed: {', '.join(changed)}\n"
+            "# every other value (height, width, seqlen, lr, resume) is the official one\n")
     CONFIG_COPY.write_text(head + yaml.safe_dump(cfg, sort_keys=False))
     print(f"OK config -> {CONFIG_COPY}", flush=True)
 
@@ -1099,7 +1089,7 @@ def main():
                         "counts x M / 5626 (not official, rows per frame of the official index)")
     p.add_argument("--force", action="store_true")
     p.add_argument("--formula", choices=("paper", "code"), default=None,
-                   help="overlap normalisation (default SEQOT_OVERLAP_FORMULA or paper)")
+                   help="overlap normalisation (default SEQOT_OVERLAP_FORMULA or code)")
     sub.add_parser("status")
     p = sub.add_parser("selftest")
     p.add_argument("--n-scans", type=int, default=2)

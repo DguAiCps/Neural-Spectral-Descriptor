@@ -10,8 +10,7 @@
 #   prep      index + polar occupancy stores for train / val / test_odom
 #             keyframes with the official CUDA extension (NPROC parallel)
 #   smoke     official loop on the first 200 keyframes per sequence, epochs 0
-#             and 5 (hard negatives from epoch 5, paper) (GPU timing / memory;
-#             separate dirs, not used for results)
+#             and 6 (GPU timing / memory; separate dirs, not used for results)
 #   train     official training, 20 epochs; resumes an unfinished run
 #   dump      past-only pr-dump-v1 ledgers on the 46 odometry test sequences
 #   aggregate PR summary (results/pdv2_disco_official/odom/pr_summary_baselines.json)
@@ -79,7 +78,7 @@ stage_prep() {
 
 stage_smoke() {
   say smoke
-  $T --smoke 200 --smoke-epochs 0 5 $TRAIN_FLAGS > "$LOG/smoke_train.log" 2>&1
+  $T --smoke 200 --smoke-epochs 0 6 $TRAIN_FLAGS > "$LOG/smoke_train.log" 2>&1
   python3 -c "import json; r=json.load(open('$W/smoke/train_selection.json')); \
 [print('smoke epoch', e['epoch'], {k: e[k] for k in ('train_s', 'trained_queries', 's_per_query', 'val_s', 'cuda_peak_gb', 'family_macro_r1')}) for e in r['epochs']]"
 }

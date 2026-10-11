@@ -36,9 +36,8 @@ construct_query_dict on real subsets and compares.
 What is ours (protocol / data):
   * scans: split-v2 keyframes after the official toolbox preprocessing
     (scripts/_helios_official_prep.py), TRAIN keyframes thinned by the
-    toolbox keyframe rule at the paper's 5 m (code: 3 m; index
-    --train-spacing), validation = Roundabout01 (official validation_set, a
-    split-v2 VAL sequence), 5 m;
+    official 3 m rule (index --train-spacing), validation = Roundabout01
+    (official validation_set, a split-v2 VAL sequence), 3 m rule;
   * poses: cache LiDAR poses (HeLiPR: LiDAR_GT/Velodyne_gt.txt rows; KITTI:
     camera-0 pose @ calib Tr).  Only HeLiPR Bridge01-04 share a frame in our
     caches; each KITTI sequence has its own local frame, so pairs are formed
@@ -333,7 +332,7 @@ def _official_overlap_matrix(work: Path, folders):
 def selftest(n_kitti: int, n_bridge: int, out_json: Path | None):
     """Two official runs: KITTI 06 (own frame) and Bridge01 + Bridge04 (shared
     frame, cross-sequence pairs).  Scans: official toolbox preprocessing of the
-    first kept TRAIN keyframes (5 m rule).  Compares (1) every matrix entry of
+    first kept TRAIN keyframes (3 m rule).  Compares (1) every matrix entry of
     the official binary with our replica, (2) the official construct_query_dict
     pickle on the official matrix with ours on the sparse pairs."""
     import pandas as pd
@@ -356,7 +355,7 @@ def selftest(n_kitti: int, n_bridge: int, out_json: Path | None):
                 poses = z["poses"].astype(np.float64)
                 sids_all = z["scan_ids"]
                 lp = P.lidar_poses(sensor, seq, poses)
-                keep = np.flatnonzero(P.official_keyframes(lp[:, :3, 3], P.PAPER_SPACING_M))[:nsc]
+                keep = np.flatnonzero(P.official_keyframes(lp[:, :3, 3], P.TOOLBOX_SPACING_M))[:nsc]
                 folder = P.seq_name(sensor, seq)
                 d = w / "runs" / folder
                 (d / "LiDAR_transformed").mkdir(parents=True)

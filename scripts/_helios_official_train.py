@@ -20,7 +20,8 @@ Imported from the official files and executed unchanged:
       masks and overlaps from the pickle, CartesianQuantizer 0.01), 4 workers
   models/losses/loss.make_losses   TruncatedSmoothAP (tau 0.01, 4 positives,
       euclidean) + two overlap-guided batch-hard triplet losses (margins 0.02
-      and 2 x 0.19), weights 1.0 / 0.1 / 0.1 (paper eq. 6; see PAPER_OVERRIDES)
+      and 2 x 0.19), weights 0.8 / 0.1 / 0.1 (config values; the paper's eq. 6
+      weight 1 is not used: public-code rule)
 The epoch loop of trainer.do_train (trainer.py:287-353) is repeated in
 `run_training` with these differences (marked CHANGED):
   1. weights are written to the run directory instead of
@@ -32,14 +33,6 @@ The epoch loop of trainer.do_train (trainer.py:287-353) is repeated in
      stats, RNG states) and --resume; the official loop has no resume;
   4. seed 1 for random / numpy / torch (the official code sets none);
   5. a per-epoch JSON record (stats, times, GPU peak memory).
-Paper over code (project rule: where they differ the paper value is used and
-the overridden code line is disclosed): PAPER_OVERRIDES below, written into the
-generated config.  The keyframe interval (paper 5 m, code 3 m) is applied in
-scripts/_helios_official_prep.py.  Every other recipe value the paper states
-equals the code (80 epochs, MultiStepLR, lr 1e-3, 100 m, 8192 points, windows
-(10 m, 1.8, 1.8 deg) x 1.5, overlap voxel 4 m / tau 6 m / 200 m truncation /
-0.5 threshold, guided-triplet (m1, m2, beta) = (0.02, 0.19, e - 1),
-omega 0.1 / 0.1, (m, l, e) = (64, 128, 256)).
 Saved like the official loop: <run>/HeLiOS_default_trainning_best.pth whenever
 the validation-phase AP (TruncatedSmoothAP statistic on validation.pickle =
 Roundabout01) beats every earlier epoch, _{10,20,...}.pth (save_freq default
@@ -80,10 +73,6 @@ RUNS = P.WORK / "runs"
 RESULTS = REPO / "results/pdv2_helios_official"
 RECORD = RESULTS / "train_record.json"
 SEED = 1
-# arXiv 2501.18943 eq. (6): L = L_TSAP + w1 L_GT(q,p,s) + w2 L_GT(q,s,n), i.e.
-# weight 1 on L_TSAP; code: truncated_weight = 0.8
-# (_external/HeLiOS/config/config_baseline_helios.txt:27, default misc/utils.py:188)
-PAPER_OVERRIDES = {"LOSS": {"truncated_weight": "1.0"}}
 
 
 PML112 = P.HENV / "pml112"   # pytorch-metric-learning 1.1.2 (official Dockerfile pin)
@@ -103,16 +92,12 @@ def official_path():
 
 
 def write_config(path: Path, dataset_folder: Path, **train_overrides) -> Path:
-    """Official config_baseline_helios.txt with dataset_folder replaced,
-    the paper values of PAPER_OVERRIDES, and (smoke / selftest only) the given
-    [TRAIN] keys."""
+    """Official config_baseline_helios.txt with dataset_folder replaced
+    (and, for smoke / selftest only, the given [TRAIN] keys)."""
     import configparser
     cp = configparser.ConfigParser()
     cp.read(OFFICIAL_CONFIG)
     cp["DEFAULT"]["dataset_folder"] = str(dataset_folder)
-    for sec, kv in PAPER_OVERRIDES.items():
-        for k, v in kv.items():
-            cp[sec][k] = v
     for k, v in train_overrides.items():
         cp["TRAIN"][k] = str(v)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -189,10 +174,7 @@ def run_training(params, run_dir: Path, record_path: Path, resume: bool,
                         "n_val": len(dataloaders["val"].dataset) if "val" in dataloaders else 0,
                         "selection_official": "model_best = highest validation-phase AP "
                                               "(trainer.py:300-302)",
-                        "paper_overrides": {"loss_weights": loss_weights,
-                                            "truncated_weight": "paper eq. 6 weight 1 (code 0.8, "
-                                                                "config_baseline_helios.txt:27)",
-                                            "keyframe_interval_m": "paper 5 (code 3), see prep index"}},
+                        "loss_weights": loss_weights},
               "epochs": []}
     if resume:                                              # CHANGED 3
         ck = torch.load(run_dir / "resume.pth", map_location="cpu", weights_only=False)
@@ -418,7 +400,7 @@ def selftest(out_json: Path):
         for sensor, seq, n in (("helipr", "Bridge01", 40), ("helipr", "Bridge04", 40), ("kitti", "06", 48)):
             z = np.load(P.cache_path("train", sensor, seq))
             lp = P.lidar_poses(sensor, seq, z["poses"].astype(np.float64))
-            keep = np.flatnonzero(P.official_keyframes(lp[:, :3, 3], P.PAPER_SPACING_M))[:n]
+            keep = np.flatnonzero(P.official_keyframes(lp[:, :3, 3], P.TOOLBOX_SPACING_M))[:n]
             loader = _make_loader(sensor, seq)
             for k in keep:
                 sid = int(z["scan_ids"][k])

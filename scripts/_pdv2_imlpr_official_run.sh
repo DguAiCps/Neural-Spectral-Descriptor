@@ -30,9 +30,9 @@
 # IMLPR_AGGREGATOR (code default = 64 clusters x 128, as the released weights |
 # paper = 128 x 64), IMLPR_BACKBONE (code default = code path, as the released
 # weights | paper = last two DINOv2 blocks only).
-# Rule: the setting that produced the paper's results -- paper values by default
-# (AdamW 5e-4, L_P + 2 L_TSAP, 1/8 positive image pairs, normal k 25), released
-# weights where they show otherwise; logs/baseline_official_20261011/imlpr.md 10-11.
+# Rule: released code with its default behaviour; exceptions = protocol, fixes
+# needed to run, and lr 5e-4 (proven by the released weights);
+# logs/baseline_official_20261011/imlpr.md section 12.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PYTHONDONTWRITEBYTECODE=1

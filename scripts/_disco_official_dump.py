@@ -186,9 +186,9 @@ def encode_and_dump(EV, model, bank, sensor, q, out_path, checkpoint, chosen,
                    "polar_rule": smeta["rule"], "polar_z_shift_m": smeta["z_shift"],
                    "polar_empty_scans": smeta.get("n_empty"),
                    "positions": "poses_gt (scoring only)"},
-        "encoder": {"polar": "20 height x 40 ring x 120 sector occupancy; paper values: "
-                             "80 m, 2 m rings, 1 m layers over 0-20 m (code: 70 m, "
-                             "1.75 m rings, 2 m layers); 3 deg sectors",
+        "encoder": {"polar": "20 height x 40 ring x 120 sector occupancy (official "
+                             "code values): 70 m, 1.75 m rings, 3 deg sectors, 2 m "
+                             "layers over -20..20 m (KITTI family after +2 m shift)",
                     "descriptor_dim": int(desc.shape[1]), "normalized": False},
         "protocol": ("causal all-frames PR ledger: per-frame DiSCO signatures computed "
                      "once per sequence (each depends only on its own scan), then per "

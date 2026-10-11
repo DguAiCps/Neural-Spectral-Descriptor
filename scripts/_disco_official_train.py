@@ -7,8 +7,7 @@ Executed unchanged from the official files (imported, not copied):
   train_DiSCO.py  argument parsing and cfg overrides (all defaults), module
                   state, train_one_epoch (shuffle; 2 positives + 18 negatives
                   + 1 other negative per query; queries with < 2 positives
-                  skipped as FAULTY TUPLE; from epoch 6 (paper: 5, see
-                  paper_hard_negative_start) every 1400 queries the
+                  skipped as FAULTY TUPLE; from epoch 6 every 1400 queries the
                   descriptors of all training scans are recomputed and 5 of the
                   query's negatives are taken by KDTree among 4000 sampled ones;
                   random yaw on the query, positives rotated by the heading
@@ -65,7 +64,7 @@ only).
 Usage (inside ring_baseline):
   python3 scripts/_disco_official_train.py                 # full run
   python3 scripts/_disco_official_train.py --resume RUN_DIR
-  python3 scripts/_disco_official_train.py --smoke 200 --smoke-epochs 0 5
+  python3 scripts/_disco_official_train.py --smoke 200 --smoke-epochs 0 6
   python3 scripts/_disco_official_train.py --selftest      # CPU only
 Official train_DiSCO.py flags pass through (e.g. --max_epoch).
 """
@@ -226,34 +225,6 @@ def load_train_module(run_dir: Path, official_argv, queries):
     return T
 
 
-HARD_NEG_START = 5   # paper Sec. IV-A "After 5 epoch of training"; code train_DiSCO.py:355 `epoch >= 6`
-
-
-def paper_hard_negative_start(T):
-    """Paper over code: hard-negative mining (latent refresh every 1400
-    queries) from epoch index 5 instead of 6.  train_one_epoch is recompiled
-    from the unchanged official source with exactly one constant replaced
-    (`epoch >= 6` -> `epoch >= 5`, train_DiSCO.py:355) into the namespace of
-    the official module; line numbers stay those of the official file."""
-    import ast
-    src_path = OFFICIAL / "train_DiSCO.py"
-    tree = ast.parse(src_path.read_text(), str(src_path))
-    fn = next(n for n in tree.body
-              if isinstance(n, ast.FunctionDef) and n.name == "train_one_epoch")
-    changed = []
-    for node in ast.walk(fn):
-        if (isinstance(node, ast.Compare) and isinstance(node.left, ast.Name)
-                and node.left.id == "epoch" and len(node.ops) == 1
-                and isinstance(node.ops[0], ast.GtE)
-                and isinstance(node.comparators[0], ast.Constant)
-                and node.comparators[0].value == 6):
-            node.comparators[0].value = HARD_NEG_START
-            changed.append(node.lineno)
-    assert changed == [355], changed
-    exec(compile(ast.Module(body=[fn], type_ignores=[]), str(src_path), "exec"), T.__dict__)
-    return changed
-
-
 def exact_hard_negatives(T):
     """OPT-IN (--fast-hard-negatives): train_DiSCO.get_random_hard_negatives
     builds a KDTree on 4000 x 1024 latent vectors at every step (~0.15 s CPU)
@@ -373,7 +344,6 @@ def train(args, official_argv):
         base.mkdir(parents=True, exist_ok=True)
         run_dir = base / datetime.now().strftime("%b%d_%H-%M-%S")
     T = load_train_module(run_dir, official_argv, queries)
-    paper_hard_negative_start(T)
     if args.fast_hard_negatives:
         T.get_random_hard_negatives = exact_hard_negatives(T)
     print(f"===> train: {len(queries)} keyframes, {queries.n_faulty()} with < 2 positives "
@@ -410,11 +380,6 @@ def train(args, official_argv):
             "LOSS_LAZY", "TRIPLET_USE_BEST_POSITIVES", "FEATURE_OUTPUT_DIM")},
         "seed": SEED, "smoke": args.smoke, "train_sequences": sizes,
         "fast_hard_negatives": bool(args.fast_hard_negatives),
-        "paper_over_code": {
-            "hard_negative_start_epoch": "5 (paper 'after 5 epoch'; code "
-                                         "train_DiSCO.py:355 epoch >= 6)",
-            "polar_input": "80 m range, 1 m layers over 0-20 m (paper; code 70 m, "
-                           "2 m layers) - scripts/_disco_official_prep.py RULE"},
         "n_faulty_queries": queries.n_faulty(),
         "val_sequences": [f"{s}/{q}" for s, q, _, _ in val_sets],
         "pools": "per sequence, 3-D positions, positives < 1.5 m, negatives > 2 m",
@@ -533,7 +498,7 @@ def selftest(args):
             coordinates for the comparison) on kitti/05 and helipr/Bridge02;
     loop  : official train_one_epoch (unchanged) on CPU on real train
             keyframes (CPU transcription for the polar images): epoch 0
-            (random negatives, 26 keys) and epoch 5 (paper start; latent refresh at query
+            (random negatives, 26 keys) and epoch 6 (latent refresh at query
             29, hard negatives, periodic model.ckpt at query 101, 120 keys);
             FAULTY TUPLE count; official evaluate.get_latent_vectors;
     recall: Euclidean R@1 == brute-force sklearn KDTree (official retrieval);
@@ -607,12 +572,10 @@ def _check_loop(out, torch, cfg, lp, EV, fake):
         key_l.append([f"train/{seq_name(sensor, seq)}/{i}" for i in range(n_per)])
     queries = PDV2Queries([], pos_l, head_l, key_l)
     # epoch 0 on 26 keys (the official tuple needs >= 18 negatives > 2 m),
-    # epoch 5 on 120 keys (paper start of hard negatives: refresh at query 29,
-    # model.ckpt at query 101)
+    # epoch 6 on 120 keys (refresh at query 29, model.ckpt at query 101)
     small = PDV2Queries([], [pos_l[0][:26]], [head_l[0][:26]], [key_l[0][:26]])
     with tempfile.TemporaryDirectory() as td:
         T = load_train_module(Path(td), [], small)
-        assert paper_hard_negative_start(T) == [355]
         assert str(T.device) == "cpu"
         random.seed(SEED)
         np.random.seed(SEED)
@@ -630,14 +593,13 @@ def _check_loop(out, torch, cfg, lp, EV, fake):
         t_e0 = time.time() - t0
         T.TRAINING_QUERIES = queries
         t0 = time.time()
-        T.train_one_epoch(model, opt, corr2soft, opt2, writer, T.SC_loss.quadruplet_loss,
-                          HARD_NEG_START)
+        T.train_one_epoch(model, opt, corr2soft, opt2, writer, T.SC_loss.quadruplet_loss, 6)
         t_e6 = time.time() - t0
         assert np.shape(T.TRAINING_LATENT_VECTORS) == (len(queries), 1024)
         assert any(not torch.equal(a, b) for a, b in zip(w0, model.parameters()))
         ck = torch.load(Path(td) / "model.ckpt", map_location="cpu", weights_only=False)
         assert set(ck) == {"epoch", "iter", "state_dict", "optimizer", "corr2soft"}
-        assert ck["epoch"] == HARD_NEG_START
+        assert ck["epoch"] == 6
         writer.close()
         log = (Path(td) / "log_train.txt").read_text()
         n_faulty = log.count("FAULTY TUPLE")
@@ -651,8 +613,7 @@ def _check_loop(out, torch, cfg, lp, EV, fake):
             "keys": [len(small), len(queries)], "queries_trained": T.TOTAL_ITERATIONS,
             "faulty_tuples_logged": n_faulty, "first_losses": losses[:3],
             "last_losses": losses[-3:], "model_ckpt_epoch": ck["epoch"],
-            "cpu_s_epoch0_26q": round(t_e0, 1),
-            f"cpu_s_epoch{HARD_NEG_START}_120q": round(t_e6, 1)}
+            "cpu_s_epoch0_26q": round(t_e0, 1), "cpu_s_epoch6_120q": round(t_e6, 1)}
         print(f"  official loop on CPU: {json.dumps(out['official_loop'])}", flush=True)
 
 
@@ -750,7 +711,7 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--smoke", type=int, default=0,
                     help="first N keyframes of every train/val sequence (GPU timing test)")
-    ap.add_argument("--smoke-epochs", type=int, nargs="+", default=[0, HARD_NEG_START],
+    ap.add_argument("--smoke-epochs", type=int, nargs="+", default=[0, 6],
                     help="epoch numbers passed to the official train_one_epoch in smoke mode")
     ap.add_argument("--resume", default="", help="run dir to continue (needs resume.pth)")
     ap.add_argument("--fast-hard-negatives", action="store_true",

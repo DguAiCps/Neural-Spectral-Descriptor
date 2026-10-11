@@ -8,10 +8,8 @@ Feeds our loaders' points into the OFFICIAL RIV generator of _external/ImLPR
     `process_one_frame` (lines 358-395: normals -> reflectivity image ->
     range image -> normal image -> HxWx3 float32 stack) is followed;
   * the script's own parameters (lines 417-438) are used: max_neighbor_m =
-    15.0, W = 1022, (H0, Hf) = (128, 126) for the angle / Ouster path and
-    (64, 64) for the MulRan path, 3.0 m training subsample; the normal k is
-    the PAPER value (App. A: 25 for MulRan / NCLT / VLP-16), not the script's
-    15 (project rule 2026-10-11: paper over code where they differ);
+    15.0, k_neighbors = 15, W = 1022, (H0, Hf) = (128, 126) for the angle /
+    Ouster path and (64, 64) for the MulRan path, 3.0 m training subsample;
   * three pieces are re-implemented for speed and checked against the
     official functions in `selftest` (same inputs -> same output):
       - fast_normals: the per-point SVD loop of compute_normals (lines 41-61)
@@ -83,13 +81,9 @@ ROLES = {
 }
 
 # generate_riv_images.py:428-438 (the released script's settings)
-SCRIPT_K_NEIGHBORS = 15        # script value, overridden per sensor by the paper (SENSORS["k"])
-MAX_NEIGHBOR_M = 15.0          # script value (the paper gives no radius)
-# Paper App. A (p.12): "k = 8 nearest neighbors for the HeLiPR-O dataset and
-# k = 25 for the MulRan, NCLT and HeLiPR-V datasets" -> project rule (paper
-# over code): k = 25 for every sensor here (no OS2-128 in our data; KITTI
-# HDL-64E and MCD OS1-64 are not in the paper and follow the non-OS2-128 value)
-PAPER_K_NON_OUSTER128 = 25
+SCRIPT_K_NEIGHBORS = 15        # released script value, used for every sensor
+MAX_NEIGHBOR_M = 15.0          # released script value
+# (the paper's App. A k = 8 / 25 is not used: baselines run the released code)
 IMAGE_W = 1022
 TRAIN_H = 126                  # DINOv2 input rows (paper: H x W = 126 x 1022)
 SUBSAMPLE_M = 3.0              # select_frame_indices dist_threshold
@@ -111,34 +105,34 @@ SENSORS = {
     # MulRan OS1-64: official MulRan path verbatim (ring = idx % 64, H0 = Hf =
     # 64, 120 m, reflectivity clamp 4096 -> /4096*255; read_bin_file:244-256,
     # script comments :434, :437); eval resizes 64 -> 126 (evaluate.py:95-98).
-    "mulran": dict(k=PAPER_K_NON_OUSTER128, v_mode="ring", ring="idx%64", H0=64, Hf=64, fov_up=16.0, fov_down=16.0,
+    "mulran": dict(k=SCRIPT_K_NEIGHBORS, v_mode="ring", ring="idx%64", H0=64, Hf=64, fov_up=16.0, fov_down=16.0,
                    max_range=120.0, intensity="mulran4096", accumulate=False,
                    src="official MulRan settings"),
     # MCD OS1-64: same sensor model as MulRan -> MulRan rule.  Our MCD files
     # are row-major (beam = idx // 1024; idx % 64 does not follow the beams).
-    "mcd": dict(k=PAPER_K_NON_OUSTER128, v_mode="ring", ring="idx//1024", H0=64, Hf=64, fov_up=22.5, fov_down=22.5,
+    "mcd": dict(k=SCRIPT_K_NEIGHBORS, v_mode="ring", ring="idx//1024", H0=64, Hf=64, fov_up=22.5, fov_down=22.5,
                 max_range=120.0, intensity="mulran4096", accumulate=False,
                 src="MulRan rule applied to OS1-64 (row-major beam index)"),
     # KITTI / KITTI-360 HDL-64E: 64 beams like OS1-64 -> single scan, 64 rows,
     # no beam index in the files -> official 'angle' mode with the HDL-64E
     # window; 120 m (HDL-64E spec); loader reflectance 0..1 -> x255.
-    "kitti": dict(k=PAPER_K_NON_OUSTER128, v_mode="angle", ring=None, H0=64, Hf=64, fov_up=2.0, fov_down=24.8,
+    "kitti": dict(k=SCRIPT_K_NEIGHBORS, v_mode="angle", ring=None, H0=64, Hf=64, fov_up=2.0, fov_down=24.8,
                   max_range=120.0, intensity="x255", accumulate=False,
                   src="rule: 64-beam single scan, angle mode, sensor window"),
-    "kitti360": dict(k=PAPER_K_NON_OUSTER128, v_mode="angle", ring=None, H0=64, Hf=64, fov_up=2.0, fov_down=24.8,
+    "kitti360": dict(k=SCRIPT_K_NEIGHBORS, v_mode="angle", ring=None, H0=64, Hf=64, fov_up=2.0, fov_down=24.8,
                      max_range=120.0, intensity="x255", accumulate=False,
                      src="rule: 64-beam single scan, angle mode, sensor window"),
     # HeLiPR VLP-16: paper App. D.1 (5 s submap, Roundabout-V) -> accumulated,
     # projected at the generator's default size (128 -> 126, INTER_AREA) in
     # angle mode with the VLP-16 window; 100 m (VLP-16 spec); intensity 0..255.
-    "helipr": dict(k=PAPER_K_NON_OUSTER128, v_mode="angle", ring=None, H0=128, Hf=126, fov_up=15.0, fov_down=15.0,
+    "helipr": dict(k=SCRIPT_K_NEIGHBORS, v_mode="angle", ring=None, H0=128, Hf=126, fov_up=15.0, fov_down=15.0,
                    max_range=100.0, intensity="clip255", accumulate=True,
                    src="paper App. D.1 (5 s submap) + generator default size"),
     # NCLT HDL-32E: paper App. D.3 (same accumulation as HeLiPR-V).  The
     # sensor is mounted upside down; the loader flips z, so the window after
     # the flip is [-10.67, +30.67] deg.  Paper: "we invert and rescale the
     # intensity distribution" (no formula) -> 255 - raw (decision D5).
-    "nclt": dict(k=PAPER_K_NON_OUSTER128, v_mode="angle", ring=None, H0=128, Hf=126, fov_up=30.67, fov_down=10.67,
+    "nclt": dict(k=SCRIPT_K_NEIGHBORS, v_mode="angle", ring=None, H0=128, Hf=126, fov_up=30.67, fov_down=10.67,
                  max_range=100.0, intensity=os.environ.get("IMLPR_NCLT_INTENSITY", "invert255"),
                  accumulate=True,
                  src="paper App. D.3 (5 s submap, inverted intensity) + flipped window"),
@@ -475,7 +469,7 @@ def cmd_index(role: str):
                 "stored_height": TRAIN_H if role == "train" else c["Hf"],
                 "sensor_settings": {k: v for k, v in c.items()},
                 "generator": {"official_commit": OFFICIAL_COMMIT,
-                              "k_neighbors": c["k"], "k_source": "paper App. A (script: 15)",
+                              "k_neighbors": c["k"], "k_source": "released script (generate_riv_images.py:431)",
                               "max_neighbor_m": MAX_NEIGHBOR_M, "image_width": IMAGE_W},
                 "accumulation": ({"window_s": ACCUM_WINDOW_S, "past_only": True,
                                   "stationary_skip_m": STATIONARY_M,

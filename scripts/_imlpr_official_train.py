@@ -42,23 +42,15 @@ Changed, each marked in the code:
      train_utils.py:117 (a batch without any Patch-InfoNCE patch pair makes
      the official step raise TypeError; the skipped backward has a zero
      gradient), see _patched_step.
-Paper over code (project rule, 2026-10-11): where the released code and the
-paper (arXiv 2505.18364) differ, the paper value is used and the code line it
-overrides is named (PAPER_OVERRIDES below; disclosed in the selection record):
-  - optimizer / lr: AdamW, 5e-4 (App. A) instead of Adam (misc/utils.py:80),
-    5e-5 (config_helipr.txt:12); weight decay is not stated in the paper ->
-    torch AdamW default, which is also what train.py:61-66 passes;
-  - trained backbone part: NOT switched to the paper's "last two blocks"; the
-    released weights match the code path (refined rule: released weights /
-    reproducing code over paper), see BACKBONE (paper_freeze is optional);
-  - loss: L_P + lambda * L_TSAP, lambda = 2 (§3.5, App. A) instead of
-    L_TSAP + 2 * L_P (train_utils.py:96);
-  - Patch-InfoNCE image pairs: 1/8 of the positive image pairs of the batch
-    (App. A) instead of a fixed 216 (config_helipr.txt:19);
-  - SALAD: the code layout (64 clusters x 128 dims) is kept because the
-    released weights have it (paper App. A writes (m, l, e) = (128, 64, 256);
-    IMLPR_AGGREGATOR=paper switches);
-  - normal k = 25 (App. A) instead of 15 (_imlpr_official_riv.py).
+Rule (2026-10-11, final): the released code with its default behaviour.
+Exceptions (DEVIATIONS below, recorded in the selection file): protocol
+changes, fixes needed to run, and the learning-rate scale proven by the
+released weights: lr = 5e-4 (config_helipr.txt:12 has 5e-5; the released
+ImLPR_default.pth moved every DINOv2 block by at most 0.21 = sum of lr over
+100 epochs x 9 steps for base lr 5e-4 with the code scheduler).  Optimizer
+stays the code default Adam without weight decay (misc/utils.py:80,
+train.py:59-66), loss stays L_TSAP + 2 L_P (train_utils.py:96), 216 image
+pairs (config_helipr.txt:19), SALAD 64 x 128, trained scope = code path.
 Environment shims: np.NINF (removed in NumPy 2, used by
 truncated_smoothap.py:26) is restored; the official top-level folders have
 no __init__.py and `datasets` is shadowed by HuggingFace datasets, so they
@@ -170,10 +162,7 @@ _STEP_NEW = """                if all_local_feats_grad is not None:  # PDV2 CHAN
 """
 _STEP_OLD2 = """    # Stage 3: recompute descriptors with grad, apply cached grads
 """
-_STEP_OLD3 = """        loss = loss_truncated + 2 * loss_contrastive
-"""
-_STEP_NEW3 = """        loss = loss_contrastive + 2 * loss_truncated  # PDV2 CHANGED (paper: L_P + lambda * L_TSAP, lambda = 2)
-"""
+
 _STEP_NEW2 = """    # Stage 3: recompute descriptors with grad, apply cached grads
     if phase == 'train' and all_local_feats_grad is None:  # PDV2 ADDED (log)
         print("[pdv2] no Patch-InfoNCE patch pair in this batch: local-feature gradient is zero", flush=True)
@@ -185,11 +174,10 @@ def _patched_step(TU):
     image pair of the batch yields a patch pair, PointInfoNCELoss returns a
     constant 0 (pointinfonce.py:141-142), all_local_feats.grad stays None and
     the official line 117 raises TypeError.  The guard skips that backward,
-    whose gradient would be zero.  Paper over code: the loss is
-    L_P + 2 * L_TSAP (paper §3.5, App. A) instead of line 96's
-    L_TSAP + 2 * L_P.  Everything else is the official source."""
+    whose gradient would be zero; everything else (incl. the loss
+    L_TSAP + 2 * L_P of line 96) is the official source."""
     src = inspect.getsource(TU.multistaged_training_step)
-    for old, new in ((_STEP_OLD, _STEP_NEW), (_STEP_OLD2, _STEP_NEW2), (_STEP_OLD3, _STEP_NEW3)):
+    for old, new in ((_STEP_OLD, _STEP_NEW), (_STEP_OLD2, _STEP_NEW2)):
         assert src.count(old) == 1, "official step changed"
         src = src.replace(old, new)
     g = dict(vars(TU))
@@ -290,7 +278,7 @@ CONFIG_CHANGES = [   # (official line, our line) in config/config_helipr.txt
     ("model_name = ImLPR_training", f"model_name = {MODEL_NAME}"),
     ("dataset_folder = ../data/", "dataset_folder = data/"),        # CWD = WORK
     ("load_weights =../weights/ImLPR_default.pth", "load_weights ="),
-    ("lr = 5e-5", "lr = 5e-4\noptimizer = AdamW"),                  # paper App. A
+    ("lr = 5e-5", "lr = 5e-4"),                    # released-weights evidence (see docstring)
     ("num_workers = 16", None),                                       # filled in
     ("train_file = training_helipr.pickle", None),                    # filled in
 ]
@@ -380,12 +368,6 @@ def cmd_config(mode: str, num_workers: int):
 _COLLATE_OLD = """            query_range = (clouds_np[i][1][:, 28:-28]) * params.sensor_range
             positive_range = (clouds_np[j][1][:, 28:-28]) * params.sensor_range
 """
-_COLLATE_OLD2 = """        sampled_pairs = sample_positive_pairs(positives_mask.numpy(), poses, params.num_positive_pairs)
-"""
-_COLLATE_NEW2 = """        _n_pos_pairs = len(extract_unique_positive_pairs(positives_mask.numpy()))  # PDV2 CHANGED (paper App. A)
-        sampled_pairs = sample_positive_pairs(positives_mask.numpy(), poses,  # PDV2 CHANGED: 1/8 of the
-                                              max(1, int(round(_n_pos_pairs / 8))))  # positive image pairs
-"""
 _COLLATE_NEW = """            _uFoV, _dFoV, _srange = _PDV2_PAIR_GEOMETRY(dataset, labels[i], labels[j])  # PDV2 CHANGED
             elevation_angles = np.linspace(_uFoV * np.pi / 180.0,  # PDV2 CHANGED (per pair)
                                            _dFoV * np.pi / 180.0,
@@ -395,21 +377,18 @@ _COLLATE_NEW = """            _uFoV, _dFoV, _srange = _PDV2_PAIR_GEOMETRY(datase
 """
 
 
-def make_collate_fn_pdv2(dataset, params, geometry=None, timed=True, fraction=True):
-    """Official make_collate_fn source with two hunks replaced:
-    (1) pair geometry: the pair's sensor window / range scale (geometry=None ->
-        GEOMETRY; IMLPR_PAIR_GEOMETRY=config -> the config values, i.e. the
-        official behaviour); (2) fraction=True: 1/8 of the positive image
-        pairs of the batch (paper App. A) instead of params.num_positive_pairs."""
+def make_collate_fn_pdv2(dataset, params, geometry=None, timed=True):
+    """Official make_collate_fn source with one hunk replaced: pair geometry =
+    the pair's sensor window / range scale (geometry=None -> GEOMETRY;
+    IMLPR_PAIR_GEOMETRY=config -> the config values, i.e. the official
+    behaviour).  Image pairs per batch: config num_positive_pairs (216)."""
     off = load_official()
     if geometry is None and PAIR_GEOMETRY == "config":
         geometry = {s: (params.uFoV, params.dFoV, params.sensor_range) for s in GEOMETRY}
     geometry = geometry or GEOMETRY
     src = inspect.getsource(off.make_collate_fn)
-    hunks = [(_COLLATE_OLD, _COLLATE_NEW)] + ([(_COLLATE_OLD2, _COLLATE_NEW2)] if fraction else [])
-    for old, new in hunks:
-        assert src.count(old) == 1, "official collate changed"
-        src = src.replace(old, new)
+    assert src.count(_COLLATE_OLD) == 1, "official collate changed"
+    src = src.replace(_COLLATE_OLD, _COLLATE_NEW)
 
     def pair_geometry(ds, li, lj):
         si = sensor_of(ds.queries[li].rel_scan_filepath)
@@ -436,7 +415,7 @@ def make_collate_fn_pdv2(dataset, params, geometry=None, timed=True, fraction=Tr
 def install_collate_patch():
     """IMLPR_PAIR_GEOMETRY=sensor (default): per-pair sensor geometry;
     =config: the config uFoV/dFoV/sensor_range for every pair (official).
-    The paper's 1/8 rule for Patch-InfoNCE image pairs applies in both."""
+    Image pairs per batch: config num_positive_pairs (216), as the code."""
     off = load_official()
     assert PAIR_GEOMETRY in ("sensor", "config"), PAIR_GEOMETRY
     off.DU.make_collate_fn = lambda dataset, params: make_collate_fn_pdv2(dataset, params)
@@ -770,20 +749,25 @@ def do_train_pdv2(params, evaluate, run_dir: Path, record: dict, record_path: Pa
     return model
 
 
-PAPER_OVERRIDES = {
-    "optimizer_lr": "AdamW 5e-4 (paper App. A) over Adam 5e-5 (misc/utils.py:80, config_helipr.txt:12)",
+DEVIATIONS = {
+    "lr": "5e-4 over config_helipr.txt:12 (5e-5): released-weights evidence (max |dw| per DINOv2 "
+          "block 0.2099-0.2143 = sum of lr for 5e-4, 9 steps/epoch, 100 epochs, code scheduler)",
+    "optimizer": "code default Adam, no weight decay (misc/utils.py:80, train.py:59-66)",
     "trained_backbone": "code path kept (models/ImLPR.py:130-144: blocks 0-8, 10, 11, embeddings "
                         "get gradients, block 9 none): it reproduces the released weights; the "
                         "paper's 'last two blocks only' is contradicted by them (IMLPR_BACKBONE)",
-    "loss_weighting": "L_P + 2 L_TSAP (paper §3.5, App. A) over L_TSAP + 2 L_P (train_utils.py:96)",
-    "patch_image_pairs": "1/8 of the positive image pairs per batch (paper App. A) over 216 "
-                         "(config_helipr.txt:19)",
+    "loss_weighting": "code L_TSAP + 2 L_P (train_utils.py:96)",
+    "patch_image_pairs": "code 216 (config_helipr.txt:19)",
     "aggregator": "code layout 64 clusters x 128 dims kept: released weights have it; the paper's "
                   "(m, l) = (128, 64) is not used (IMLPR_AGGREGATOR)",
-    "optimizer_evidence": "released weights: max |w - w_pretrained| per DINOv2 block 0.2099-0.2143 = "
-                          "sum of lr over the run for lr 5e-4, 9 steps/epoch, 100 epochs, code "
-                          "scheduler (0.2130); lr 5e-5 would give 0.021",
-    "normal_k": "25 (paper App. A) over 15 (generate_riv_images.py:431)",
+    "normal_k": "released script k = 15, 15 m (generate_riv_images.py:431-432)",
+    "run_fixes": "multistaged_training_step None guard (needed when a batch has no patch pair); "
+                 "evaluate() replaced (broken call + test-place pickles)",
+    "protocol": "split-v2 keyframes, 3 m thinning, past-only 5 s accumulation (VLP-16, HDL-32E), "
+                "per-sensor projection where no official setting exists, NCLT flipped window, "
+                "global cross-sequence tuples, v2-val selection, pr-dump-v1, seed 1",
+    "pair_geometry": "per-sensor uFoV/dFoV/sensor_range in Patch-InfoNCE back-projection "
+                     "(not needed to run; changes the patch pairs; IMLPR_PAIR_GEOMETRY=config = official)",
 }
 
 
@@ -806,7 +790,7 @@ def _meta(mode, cfg_text, run_dir, smoke=False):
             "config_uFoV_dFoV_sensor_range": "kept at the official values; superseded per "
                                               "pair by patch_infonce_geometry (collate patch)",
             "val_sequences": [f"{s}/{q}" for s, q in VAL],
-            "paper_overrides": PAPER_OVERRIDES,
+            "deviations": DEVIATIONS,
             "aggregator": AGGREGATOR, "backbone": BACKBONE, "model_config": model_config_text(),
             "selection_rule": ("official train.py cadence: evaluate at the start of every 5th "
                                "epoch (state after epoch-1 epochs), keep `_best.pth` when "
@@ -977,10 +961,8 @@ def selftest(parts, n_per_seq: int, out_json: Path | None):
             ds = off.BD.TrainingDataset(params.dataset_folder, params.train_file)
             ids = [i for i, qd in ds.queries.items() if sensor_of(qd.rel_scan_filepath) == "kitti"][:8]
             geo = {"kitti": (params.uFoV, params.dFoV, params.sensor_range)}
-            # official collate with num_positive_pairs = 1/8 of this batch's positive pairs
             n_pp = sum(1 for x in ids for y in ds.queries[x].positives if y in set(ids) and y > x)
-            p_off = types.SimpleNamespace(**vars(params))
-            p_off.num_positive_pairs = max(1, int(round(n_pp / 8)))
+            p_off = params                       # official num_positive_pairs (config value)
             outs = []
             for fn in (off.make_collate_fn(ds, p_off),
                        make_collate_fn_pdv2(ds, params, geometry=geo, timed=False)):

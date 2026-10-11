@@ -10,12 +10,12 @@
 #   prep      range images of train (all raw scans) and val (raw scans behind
 #             each keyframe), 5th-scan frames, overlap labels (NPROC parallel)
 #   smoke     GPU timing / memory on small subsets (separate dirs, not results)
-#   train1    phase 1 (featureExtracter), paper recipe: lr 5e-6, epochs 1..20,
-#             1 + 6 + 6, past windows; resumes
+#   train1    phase 1 (featureExtracter), official code recipe: lr 5e-7,
+#             epochs 1..99, 1 + 3 + 3, centred windows; resumes
 #   select1   score phase-1 epochs on v2 VAL (FOLLOW=1: wait for new epochs,
 #             can run on a second GPU while train1 runs)
 #   subdesc   official gen_sub_descriptors with the chosen phase-1 weights
-#   train2    phase 2 (GeM), paper recipe: lr 5e-5, epochs 1..20; resumes
+#   train2    phase 2 (GeM), official code recipe: lr 5e-6, epochs 1..99; resumes
 #   select2   score GeM epochs on v2 VAL
 #   dump      per test sequence: range images (NPROC parallel) -> past-only
 #             ledgers (seqotl2 = official L2, REPORTED; seqot = cosine record) -> range store
@@ -26,9 +26,10 @@
 #     bash scripts/_pdv2_seqot_official_run.sh config selftest prep smoke
 #   docker exec -e GPU=0 -w /workspace/Neural-Spectral-Codec ring_baseline \
 #     bash scripts/_pdv2_seqot_official_run.sh train1 select1 subdesc train2 select2 dump aggregate
-# Decisions 2026-10-11: paper recipe wherever code and paper differ (lr, epochs,
-# Npos/Nneg, past training windows, negative rule, Eq. 13 overlap); official
-# label counts per sequence; L2 for selection and the reported ledger.
+# Rule 2026-10-11: official code defaults; exceptions only for the protocol
+# (split-v2 data, trailing raw-scan windows at evaluation, pr-dump-v1, seed 1,
+# v2 VAL selection, NCLT window, official label counts). L2 for selection and
+# the reported ledger.
 # Optional: SEQOT_SELECT_METRIC=l2|cos (default l2), SEQOT_RANGE_ROOT (range
 # store location, same value for every stage), NPROC (default 16).
 set -euo pipefail
@@ -59,12 +60,10 @@ stage_selftest() {
     > "$LOG/selftest_prep.log" 2>&1
   CUDA_VISIBLE_DEVICES= $T selftest --parts recall train1 train2 resume descriptors \
     --out-json "$LOG/selftest_train.json" > "$LOG/selftest_train.log" 2>&1
-  CUDA_VISIBLE_DEVICES= $T selftest --parts paper --out-json "$LOG/selftest_train_paper.json" \
-    > "$LOG/selftest_train_paper.log" 2>&1   # separate process: keeps CPU RAM < 3 GB
   CUDA_VISIBLE_DEVICES= $D dry-run-cpu --seq nclt/2013-01-10 --n 80 --out-dir "$W/dryrun" \
     > "$LOG/selftest_dryrun.log" 2>&1
   rm -rf "$W/dryrun"
-  for f in prep train train_paper dryrun; do tail -1 "$LOG/selftest_$f.log"; done
+  for f in prep train dryrun; do tail -1 "$LOG/selftest_$f.log"; done
 }
 
 stage_prep() {

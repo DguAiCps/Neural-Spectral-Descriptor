@@ -19,8 +19,7 @@ logs/baseline_official_20261011/ring_family.md):
                 ground_plane_level < z < zbound, scale to [-1, 1])
       bev     = utils.core.generate_bev_occ(pc_norm)        RING   (1x120x120)
                 utils.core.generate_bev_feats(pc_norm)      RING++ (6x120x120)
-      tiring  = utils.core.generate_RING(bev)[1]   (angle grid: paper value,
-                see generate_ring_paper; overrides utils/core.py:153)
+      tiring  = utils.core.generate_RING(bev)[1]
       score   = utils.core.batch_circorr  (dist = 1 - normalized circular
                 correlation; exhaustive over the candidates)
     The only thing replaced is the class's raw-file reader
@@ -165,30 +164,6 @@ def import_ring_core():
         import utils.core as core  # noqa: E402  (RING repo)
         _RING["core"] = core
     return _RING["core"]
-
-
-# Paper setting (project rule 2026-10-11: paper value wins over code, code
-# line disclosed).  RING (IROS'22 Sec. III: theta in [0, 2pi), k = 120) and
-# RING++ (T-RO'23 Sec. VI-E: rotation resolution 360/120 = 3 deg/pixel)
-# sample 120 projection angles over [0, 2pi).  The repo's GPU path
-# (utils/core.py:153 generate_RING) uses np.linspace(0, 2*np.pi, 120), i.e.
-# 360/119 deg with both 0 and 360 deg; its own CPU path (core.py:164) and
-# its yaw read-out (evaluation/evaluate.py, ang_res = 2*pi/num_ring) use the
-# paper grid.
-def ring_angles_paper(n: int) -> np.ndarray:
-    return np.linspace(0, 2 * np.pi, n, endpoint=False).astype(np.float32)
-
-
-def generate_ring_paper(pc_bev):
-    """utils/core.py generate_RING with the paper angle grid (only change)."""
-    import torch
-    from torch_radon import ParallelBeam
-    core = import_ring_core()
-    cfg = _RING["cfg"]
-    radon = ParallelBeam(cfg.num_sector, torch.FloatTensor(ring_angles_paper(cfg.num_ring)))
-    pc_RING = radon.forward(pc_bev)
-    pc_TIRING, _ = core.forward_row_fft(pc_RING)
-    return pc_RING, pc_TIRING
 
 
 def official_points(sensor: str, pts: np.ndarray):

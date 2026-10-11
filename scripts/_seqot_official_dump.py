@@ -85,9 +85,9 @@ def _meta(sensor, q, n, arrays, score, extra):
          "window": "trailing raw-scan windows ending at the keyframe: sub-descriptor "
                    f"[s-{SEQL - 1}, s], GeM [s-{GEM_SEQLEN - 1}, s]; official fallback "
                    "(window leaving the sequence -> filled with its last scan)",
-         "deviation": "official code centres both windows ([s-1, s+1], [s-10, s+9]); "
-                      "the past-only protocol and the paper (III-A, m past scans) use "
-                      "past windows, here in training and evaluation. SeqOT reads up to "
+         "deviation": "official code centres both windows ([s-1, s+1], [s-10, s+9]) and "
+                      "training keeps them; the past-only protocol requires trailing windows "
+                      "at evaluation (the paper describes m past scans). SeqOT reads up to "
                       f"{BACK} past raw scans behind each keyframe (other methods read the "
                       "keyframe scan only).",
          "official": {"repo": OFFICIAL_REPO, "commit": OFFICIAL_COMMIT,
@@ -97,8 +97,9 @@ def _meta(sensor, q, n, arrays, score, extra):
          "reported": (score == METHODS[REPORTED]),
          "reported_note": f"{REPORTED} (official L2) is the reported SeqOT ledger; "
                           "seqot (cosine, prereg §1.5) is a record",
-         "training": "paper recipe (lr 5e-6 / 20 ep, GeM 5e-5 / 20 ep, 6+6, past windows, "
-                     "Eq. 13 overlap); see results/pdv2_seqot_official/train_selection.json"}
+         "training": "official code defaults (lr 5e-7 / 99 ep, GeM 5e-6 / 99 ep, 3+3 / 6+6, "
+                     "centred windows, code overlap); epochs chosen on v2 VAL, "
+                     "results/pdv2_seqot_official/train_selection.json"}
     m.update(extra)
     return m
 
@@ -190,7 +191,7 @@ def cmd_aggregate():
     c3.cmd_aggregate_baselines("odom")
     p = OUT / "pr_summary_baselines.json"
     s = json.loads(p.read_text())
-    s["_meta"]["seqot"] = ("official SeqOT code, paper recipe, retrained on split-v2 train "
+    s["_meta"]["seqot"] = ("official SeqOT code and default recipe, retrained on split-v2 train "
                            "(scripts/_seqot_official_train.py), epochs chosen on v2 VAL by "
                            "L2 R@1; REPORTED = seqotl2 (official L2 retrieval), seqot = "
                            "cosine record (prereg §1.5); "

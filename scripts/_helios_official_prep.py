@@ -34,14 +34,14 @@ official trajectory), TEST with the KISS-ICP odometry of every scan
 odometry of the next one or two scans).  KITTI, KITTI-360, MulRan, NCLT and MCD
 scans carry no per-point times in our loaders and are used as they are.
 `--deskew none` turns it off everywhere.  `deskew-effect` measures it.
-Keyframe spacing (project rule: where code and paper differ, the paper
-wins): the toolbox keeps a scan when it is more than distanceThreshold from
-the last kept one; the official config says 3 m (helipr_toolbox_config.yaml:23),
-the paper says "sampled at 5m intervals" (Sec. IV-C, training and testing).
-`index --train-spacing` applies that rule with the paper's 5 m to the split-v2
-TRAIN keyframe stream (default 5; 0 = all keyframes).  VAL and TEST keep every
-keyframe; VAL Roundabout01 (the official validation sequence, a paper test
-location sampled at 5 m) also gets the 5 m mask for the validation pickle.
+Keyframe spacing (official code value; project rule 2026-10-11: the public
+code's actual behaviour, not paper values): the toolbox keeps a scan when it
+is more than distanceThreshold = 3 m (helipr_toolbox_config.yaml:23) from the
+last kept one (the paper says 5 m; the released weights carry no evidence
+either way).  `index --train-spacing` applies that rule to the split-v2 TRAIN
+keyframe stream (default 3; 0 = all keyframes).  VAL and TEST keep every
+keyframe; VAL Roundabout01 (official validation sequence) also gets the 3 m
+mask for the validation pickle.
 
 Layout (official dataset folder; rel paths go into the pickles):
   _external/helios_official_pdv2/data/{role}/{sensor}_{seq}/LiDAR/{scan_id:06d}.bin
@@ -50,7 +50,7 @@ roles: train (v2 TRAIN, GT keyframe caches), val (v2 VAL, GT keyframe caches),
 test_odom (v2 TEST, KISS-ICP keyframe caches; poses_gt for scoring only).
 
 Subcommands (inside ring_baseline):
-  index [--train-spacing 5] [--deskew helipr|none]   index.npz + meta.json
+  index [--train-spacing 3] [--deskew helipr|none]   index.npz + meta.json
   jobs [--chunk 2000]         "role seq shard nshards" generation jobs
   gen --role R --seq S [--shard k --nshards n]   write .bin scans (resumable)
   status                      count .bin files against the index
@@ -108,10 +108,10 @@ OFFICIAL_VAL = [("helipr", "Roundabout01")]
 # geo_overlap.json frames + cache check: Bridge01-04 = local ENU of
 # Velodyne_gt.txt); every other sequence is its own frame
 FRAME_GROUP = {f"helipr/Bridge0{i}": "helipr_bridge" for i in (1, 2, 3, 4)}
-# paper sampling interval (arXiv 2501.18943 Sec. IV-C "sampled at 5m
-# intervals"); overrides the code's distanceThreshold: 3
-# (_external/HeLiOS/datasets/preprocess/helipr_toolbox_config.yaml:23)
-PAPER_SPACING_M = 5.0
+# official keyframe interval: distanceThreshold: 3
+# (_external/HeLiOS/datasets/preprocess/helipr_toolbox_config.yaml:23,
+# asserted in official_toolbox_config); the paper's 5 m is NOT used
+TOOLBOX_SPACING_M = 3.0
 
 
 def seq_name(sensor: str, seq: str) -> str:
@@ -318,7 +318,7 @@ def cmd_index(roles, train_spacing: float, deskew: str):
             if role == "train":
                 spacing = train_spacing
             elif role == "val" and (sensor, seq) in OFFICIAL_VAL:
-                spacing = PAPER_SPACING_M
+                spacing = float(cfg["Save"]["distanceThreshold"])
             else:
                 spacing = None
             keep = (official_keyframes(lp[:, :3, 3], spacing) if spacing
@@ -342,9 +342,8 @@ def cmd_index(roles, train_spacing: float, deskew: str):
                     "n_frames": int(len(sids)), "n_keep": int(keep.sum()),
                     "n_generate": int(gen.sum()),
                     "keyframe_spacing_m": spacing,
-                    "keyframe_rule": "accumulateScans distanceThreshold rule (official code) "
-                                     "with the paper's interval on the split-v2 keyframe stream "
-                                     "(LiDAR positions); code value 3 m overridden"
+                    "keyframe_rule": "official accumulateScans distanceThreshold rule on "
+                                     "the split-v2 keyframe stream (LiDAR positions)"
                                      if spacing else "every split-v2 keyframe",
                     "frame_group": frame_group(sensor, seq),
                     "lidar_poses": None if lp is None else
@@ -782,8 +781,8 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("index")
     p.add_argument("--role", choices=tuple(ROLES), nargs="+", default=list(ROLES))
-    p.add_argument("--train-spacing", type=float, default=PAPER_SPACING_M,
-                   help="keyframe interval on the TRAIN keyframes: paper 5 m (code 3 m; 0 = all)")
+    p.add_argument("--train-spacing", type=float, default=TOOLBOX_SPACING_M,
+                   help="official toolbox distanceThreshold on the TRAIN keyframes (0 = all)")
     p.add_argument("--deskew", choices=("helipr", "none"), default="helipr",
                    help="official toolbox undistortion for HeLiPR (the only per-point times)")
     p = sub.add_parser("jobs")
