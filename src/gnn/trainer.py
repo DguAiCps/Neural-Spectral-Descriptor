@@ -323,7 +323,8 @@ class GNNTrainer:
 
     @staticmethod
     def _sensor_label_from_dataset_name(dataset_name: str) -> str:
-        return dataset_name.split('_', 1)[0].lower()
+        label = dataset_name.split('_', 1)[0].lower()
+        return 'kitti' if label == 'kitti360' else label  # same HDL-64E family
 
     def _sensor_scalar_table_from_config(
         self,
@@ -407,6 +408,7 @@ class GNNTrainer:
             'sequence_macro_recall@1': ('_sequence_macro', 'recall@1'),
             'sensor_macro': ('_sensor_macro', 'recall@1'),
             'sensor_macro_recall@1': ('_sensor_macro', 'recall@1'),
+            'sensor_pooled_macro': ('_sensor_pooled', 'recall@1'),
         }
         if key in aliases:
             section, metric = aliases[key]
@@ -1617,6 +1619,13 @@ class GNNTrainer:
             ]))
         else:
             sensor_macro = raw_sensor_macro = ctx_sensor_macro = 0.0
+        # Queries pooled within a sensor family, families weighted equally
+        # (a 9-query sequence does not get a full sequence vote).
+        sensor_pooled = float(np.mean([
+            sum(m['recall@1'] * m['n_queries'] for m in group)
+            / sum(m['n_queries'] for m in group)
+            for group in sensor_groups.values()
+        ])) if sensor_groups else 0.0
 
         all_metrics['_sequence_macro'] = {
             'recall@1': seq_macro,
@@ -1630,6 +1639,10 @@ class GNNTrainer:
             'ctx_recall@1': ctx_sensor_macro,
             'n_sensors': len(sensor_groups),
         }
+        all_metrics['_sensor_pooled'] = {
+            'recall@1': sensor_pooled,
+            'n_sensors': len(sensor_groups),
+        }
         logging.info(
             f"  {'SEQ-MACRO':20s} | R@1: {seq_macro:.4f} "
             f"(raw: {raw_seq_macro:.4f}, ctx: {ctx_seq_macro:.4f}) | "
@@ -1638,6 +1651,10 @@ class GNNTrainer:
         logging.info(
             f"  {'SENSOR-MACRO':20s} | R@1: {sensor_macro:.4f} "
             f"(raw: {raw_sensor_macro:.4f}, ctx: {ctx_sensor_macro:.4f}) | "
+            f"Sensors: {len(sensor_groups)}"
+        )
+        logging.info(
+            f"  {'SENSOR-POOLED':20s} | R@1: {sensor_pooled:.4f} | "
             f"Sensors: {len(sensor_groups)}"
         )
 

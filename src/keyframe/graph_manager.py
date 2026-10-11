@@ -1427,10 +1427,13 @@ def build_graph_from_keyframes_batch(
         )
     if similarity_causal:
         # Pre-registered full-causal mode: every edge must satisfy src < dst.
-        if temporal_edge_mode != 'past_to_current':
+        # 'bidirectional' is also allowed for the fixed-lag condition: similarity
+        # edges stay past -> current, temporal edges span the +-half window.
+        if temporal_edge_mode not in ('past_to_current', 'bidirectional'):
             raise ValueError(
                 "similarity_causal=True requires temporal_edge_mode="
-                "'past_to_current' (full causal graph)")
+                "'past_to_current' (full causal graph) or 'bidirectional' "
+                "(fixed-lag graph)")
         if loop_closures:
             raise ValueError(
                 "verified loop-closure edges are disabled in causal mode "

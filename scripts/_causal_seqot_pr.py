@@ -225,7 +225,10 @@ def run_worker(args, sensor: str, seq: str):
     final_n = final / norms  # cosine == normalized dot (intra driver: faiss
     #                          normalize_L2 + IndexFlatIP)
 
-    positions = poses[:, :3, 3]
+    # Scoring uses ground-truth poses (poses_gt on odometry-keyframe caches;
+    # poses.npy / cache["poses"] are the system-side poses).
+    gt_poses = cache["poses_gt"][:n] if "poses_gt" in cache.files else poses
+    positions = gt_poses[:, :3, 3]
     min_past = min_past_dists(positions)
     t2 = time.time()
     arrays = dump_ledger(final_n, positions, min_past)

@@ -150,6 +150,7 @@ def apply_data_root(config, data_root):
         'nclt': root / 'nclt',
         'helipr': root / 'helipr',
         'mulran': root / 'mulran',
+        'kitti360': root / 'kitti360',
     }
     for split in ('train', 'val', 'test'):
         for dataset_cfg in config['data']['datasets'].get(split, []):
@@ -1000,6 +1001,37 @@ def main():
                     val_datasets_info[dataset_name] = {
                         'keyframes': keyframes,
                         'dataset_type': dataset_type,
+                    }
+                    logging.info(f"  Validation {dataset_name}: {len(keyframes)} keyframes")
+
+            elif dataset_type == 'kitti360':
+                # KITTI-360 is an HDL-64E like KITTI odometry: same elevation
+                # range, cache key and graph/sensor metadata as 'kitti'
+                # (scripts/_pd_build_test_caches.py SENSOR_FAMILY).
+                from data.kitti360_loader import Kitti360Loader
+                if projection_type != 'bev':
+                    encoder.set_elevation_range(get_elevation_range(config, 'kitti'))
+                for drive in sequences:
+                    ds_name = f"kitti360_val_{drive}"
+                    cache_path = get_cache_path(cache_dir, config, 'kitti', ds_name)
+                    if cache_path.exists():
+                        keyframes = load_keyframes_cache(cache_path)
+                        logging.info(f"    Loaded from cache: {len(keyframes)} keyframes ({ds_name})")
+                    else:
+                        keyframe_selector.reset()
+                        loader = Kitti360Loader(root, drive, lazy_load=True)
+                        keyframes = process_dataset(
+                            loader, encoder, keyframe_selector, device,
+                            dataset_name=ds_name,
+                            compute_fft_magnitudes=need_fft_magnitudes,
+                            compute_phase_features=need_phase_features,
+                            phase_feature_config=phase_feature_config,
+                        )
+                        save_keyframes_cache(cache_path, keyframes)
+                    dataset_name = f"KITTI360_{drive}"
+                    val_datasets_info[dataset_name] = {
+                        'keyframes': keyframes,
+                        'dataset_type': 'kitti',
                     }
                     logging.info(f"  Validation {dataset_name}: {len(keyframes)} keyframes")
 

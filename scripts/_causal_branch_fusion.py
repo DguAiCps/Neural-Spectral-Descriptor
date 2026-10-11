@@ -75,6 +75,13 @@ VARIANTS = {
 }
 
 
+def key_input(d: np.ndarray, cfg) -> np.ndarray:
+    """Key block input before the diagonal weight (cfg key_remetrize.key_transform)."""
+    kt = cfg["gnn"].get("key_remetrize", {}).get("key_transform")
+    assert kt in (None, "log1p"), kt
+    return np.log1p(d) if kt == "log1p" else d
+
+
 def make_model_causal(variant: str, seed: int, device: str):
     """_pd_branch_fusion.make_model_pd wired to the causal variant table."""
     V = VARIANTS[variant]
@@ -83,6 +90,8 @@ def make_model_causal(variant: str, seed: int, device: str):
     cfg["gnn"]["gate_initial_alpha"] = 0.0625
     cfg = copy.deepcopy(cfg)
     cfg["gnn"]["key_remetrize"] = {"enabled": True, "init_path": str(V["rvec"])}
+    if V.get("key_transform"):
+        cfg["gnn"]["key_remetrize"]["key_transform"] = V["key_transform"]
     ckpt = REPO / "checkpoints" / V["ckpt_dir"].format(seed=seed) / "best_model.pth"
     model = _make_model(cfg, ckpt, device)
     blob = torch.load(V["cls"], map_location="cpu", weights_only=False)
@@ -124,7 +133,7 @@ def nsd_embedding_causal(cache, sensor: str, d288: np.ndarray, layouts: np.ndarr
     with torch.no_grad():
         emb_a = model(graph.to(device)).detach().cpu().numpy()
 
-    d_rm = _normalize(d288 * r[None])
+    d_rm = _normalize(key_input(d288, cfg) * r[None])
     src, dst, feats, _ = causal_edge_features(
         emb_a, d_rm, range_phase_flat(layouts), cache["poses"], want_labels=False,
     )

@@ -1,0 +1,40 @@
+{
+  "generator": "scripts/_pdv2_fit_key_logbayes.py",
+  "key_transform": "log1p",
+  "rule": "w = sqrt(max(1/W - 1/B, 0)) on log1p(d); W, B per-sequence means averaged over the 8 v2 train sequences; constant sigma coordinates weight 0",
+  "zero_weight_coords": 32,
+  "pairs": {
+    "kitti/01": {
+      "same_place_pairs": 0,
+      "diff_place_pairs": 3303
+    },
+    "kitti/02": {
+      "same_place_pairs": 303,
+      "diff_place_pairs": 12978
+    },
+    "kitti/05": {
+      "same_place_pairs": 377,
+      "diff_place_pairs": 6243
+    },
+    "kitti/06": {
+      "same_place_pairs": 253,
+      "diff_place_pairs": 2988
+    },
+    "helipr/Bridge01": {
+      "same_place_pairs": 8121,
+      "diff_place_pairs": 40000
+    },
+    "helipr/Bridge02": {
+      "same_place_pairs": 5841,
+      "diff_place_pairs": 37773
+    },
+    "helipr/Bridge03": {
+      "same_place_pairs": 7471,
+      "diff_place_pairs": 40000
+    },
+    "helipr/Bridge04": {
+      "same_place_pairs": 8481,
+      "diff_place_pairs": 40000
+    }
+  }
+}

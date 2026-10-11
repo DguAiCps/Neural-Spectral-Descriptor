@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Generate the revision LaTeX table fragments from committed result JSONs.
 
-Emits into docs/paper/body_v2.1/tables_rev/ (the working copy \\input's them):
+Emits into docs/paper/body_v2.1/tables_rev/ by default; --output-dir selects
+another manuscript's table directory (e.g. docs/paper/body_v2.2/tables_rev/):
   table1_strict.tex      — Main Table 1: 37-seq place-disjoint offline retrieval
                             (Strict-v2 rev3; RING# = clean pd retrain)
   table2_xsession.tex    — Main Table 2: RING-style cross-session retrieval
@@ -22,6 +23,7 @@ Numbers come exclusively from:
 Re-run after any upstream change; never hand-edit the fragments.
 """
 from __future__ import annotations
+import argparse
 import json
 import statistics
 from collections import defaultdict
@@ -431,6 +433,12 @@ def appdx_causal_pr():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--output-dir", type=Path, default=OUT,
+        help="표 조각을 저장할 폴더 (기본값: docs/paper/body_v2.1/tables_rev)",
+    )
+    OUT = parser.parse_args().output_dir.resolve()
     table1()
     table2()
     table3()

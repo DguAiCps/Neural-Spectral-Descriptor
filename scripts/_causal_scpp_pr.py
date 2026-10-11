@@ -174,7 +174,9 @@ def run_sequence(sensor: str, seq: str, workers: int, out_dir: Path,
     cache_path = _resolve_cache(sensor, seq)
     with np.load(cache_path) as c:
         scan_ids = c["scan_ids"].astype(np.int64)
-        poses = c["poses"].astype(np.float64)
+        # Scoring uses ground-truth poses (poses_gt on odometry-keyframe caches).
+        poses = (c["poses_gt"] if "poses_gt" in c.files
+                 else c["poses"]).astype(np.float64)
     if limit:
         scan_ids, poses = scan_ids[:limit], poses[:limit]
     n = len(scan_ids)

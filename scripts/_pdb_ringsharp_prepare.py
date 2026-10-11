@@ -45,6 +45,7 @@ from glnet.datasets.base_datasets import TrainingTuple  # noqa: E402
 OUT = REPO / "_external" / "ringsharp_data_pd2026"
 CONFIG = REPO / "configs" / "training_place_disjoint.yaml"
 CACHE_DIR = REPO / "data" / "preprocessed_pd2026"
+EXPECTED_TRAIN = 16                     # pd2026 train split size
 
 CACHE_KEYS = {"kitti": "fecdaef7", "nclt": "aff53e59",
               "helipr": "ad22d735", "mulran": "50223b37"}
@@ -85,7 +86,8 @@ def main():
     for ds in cfg["data"]["datasets"]["train"]:
         for seq in ds["sequences"]:
             train_list.append((ds["type"], str(seq)))
-    assert len(train_list) == 16, f"expected 16 pd train sequences, got {len(train_list)}"
+    assert len(train_list) == EXPECTED_TRAIN, \
+        f"expected {EXPECTED_TRAIN} train sequences, got {len(train_list)}"
 
     seqs = {}
     for dtype, seq in train_list:

@@ -593,6 +593,10 @@ class SpectralGNN(nn.Module):
         # invariance guarantee. Warm-started from the closed-form diag-WCCN vector.
         krc = key_remetrize_config or {}
         self.use_key_remetrize = bool(krc.get("enabled", False))
+        # Optional elementwise transform of the key before the diagonal weight
+        # (None or 'log1p'; still a function of the invariant key alone).
+        self.key_transform = krc.get("key_transform") if self.use_key_remetrize else None
+        assert self.key_transform in (None, "log1p"), self.key_transform
         if self.use_key_remetrize:
             init_path = krc.get("init_path")
             if init_path:
@@ -1095,7 +1099,8 @@ class SpectralGNN(nn.Module):
 
         # L2 normalize each part so both contribute equally to distance metrics.
         # Optional learned diagonal re-metrization of the invariant key (yaw-invariant).
-        x_key = x_raw * self.key_scale if self.key_scale is not None else x_raw
+        x_key = torch.log1p(x_raw) if self.key_transform == "log1p" else x_raw
+        x_key = x_key * self.key_scale if self.key_scale is not None else x_key
         raw_norm = F.normalize(x_key, p=2, dim=-1)
         ctx_norm = F.normalize(context, p=2, dim=-1)
 
@@ -1235,7 +1240,8 @@ class SpectralGNN(nn.Module):
 
         # L2 normalize each part so both contribute equally to distance metrics.
         # Optional learned diagonal re-metrization of the invariant key (yaw-invariant).
-        x_key = x_raw * self.key_scale if self.key_scale is not None else x_raw
+        x_key = torch.log1p(x_raw) if self.key_transform == "log1p" else x_raw
+        x_key = x_key * self.key_scale if self.key_scale is not None else x_key
         raw_norm = F.normalize(x_key, p=2, dim=-1)
         ctx_norm = F.normalize(context, p=2, dim=-1)
         if self.use_residual_gate and self.gate is not None:

@@ -129,7 +129,9 @@ def encode_sequence(sensor: str, seq: str, cache_rel: str, weights: Path):
         raise FileNotFoundError(cache_path)
     with np.load(cache_path, allow_pickle=False) as cache:
         scan_ids = cache["scan_ids"].astype(np.int64)
-        poses = cache["poses"].astype(np.float64)
+        # Scoring uses ground-truth poses (poses_gt on odometry-keyframe caches).
+        poses = (cache["poses_gt"] if "poses_gt" in cache.files
+                 else cache["poses"]).astype(np.float64)
     assert len(scan_ids) == len(poses), (sensor, seq, "scan_ids/poses length")
 
     os.environ["NSD_BEVPLACE_WEIGHTS"] = str(weights)  # before import

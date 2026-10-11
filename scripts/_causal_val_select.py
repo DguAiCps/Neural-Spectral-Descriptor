@@ -254,10 +254,12 @@ def run_tuples_worker(args, sensor: str, seq: str):
     cache, d288, layouts, sk, raw_height, (cache_p, lay_p, spec_p) = \
         _load_val_sequence(sensor, seq)
     emb, artifacts = _causal_embed(args, sensor, seq, cache, d288, layouts)
-    positions = cache["poses"][:, :3, 3]
+    # Scoring uses ground-truth poses (poses_gt on odometry-keyframe caches).
+    gt_poses = cache["poses_gt"] if "poses_gt" in cache.files else cache["poses"]
+    positions = gt_poses[:, :3, 3]
     # Causal revisit queries: positive within 5 m at >= 30 frames EARLIER
     # (_find_queries scans prior = [0, t - 30] only -- already past-only).
-    queries = _find_queries(cache["poses"], DTH, MIN_INDEX_GAP)
+    queries = _find_queries(gt_poses, DTH, MIN_INDEX_GAP)
     print(f"[{sensor}/{seq}] n_queries={len(queries)} "
           f"grid={len(WEIGHTS)} tuples", flush=True)
 
@@ -306,7 +308,9 @@ def run_confidence_worker(args, sensor: str, seq: str):
         _load_val_sequence(sensor, seq)
     emb, artifacts = _causal_embed(args, sensor, seq, cache, d288, layouts)
     n = len(emb)
-    positions = cache["poses"][:, :3, 3]
+    # Scoring uses ground-truth poses (poses_gt on odometry-keyframe caches).
+    gt_poses = cache["poses_gt"] if "poses_gt" in cache.files else cache["poses"]
+    positions = gt_poses[:, :3, 3]
     # min 3D distance from t to ANY frame <= t - 30 (query classification
     # input; per-query prefix scan -- _causal_pr_dump.run_worker verbatim).
     min_past = np.full(n, np.nan)

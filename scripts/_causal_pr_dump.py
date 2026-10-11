@@ -156,7 +156,10 @@ def run_worker(args, sensor: str, seq: str):
     n = len(emb)
     assert n == len(cache["poses"]), (sensor, seq, "embedding/pose length")
 
-    positions = cache["poses"][:, :3, 3]
+    # Scoring uses ground-truth poses; caches built on odometry keyframes
+    # carry them separately as poses_gt (cache["poses"] = what the system sees).
+    gt_poses = cache["poses_gt"] if "poses_gt" in cache.files else cache["poses"]
+    positions = gt_poses[:, :3, 3]
     # min 3D distance from t to ANY frame <= t - 30 (query classification
     # input; per-query prefix scan — never a full-sequence statistic).
     min_past = np.full(n, np.nan)

@@ -37,6 +37,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 from evaluate_kitti_checkpoint import _apply_encoder_preset, _make_model
 from build_and_train_edge_classifier import EdgeMLP, range_phase_flat
 from run_kitti_operating_point import _normalize
+from _causal_branch_fusion import key_input  # noqa: E402
 from _pd_build_edge_classifier import PD_TRAIN_SEQS, PD_HOLDOUT, _pd_cache, _layouts
 from _causal_edge_features import causal_edge_features, causal_pass1_graph
 
@@ -82,6 +83,8 @@ def main():
     cfg["gnn"]["gate_initial_alpha"] = 0.0625
     rm_cfg = copy.deepcopy(cfg)
     rm_cfg["gnn"]["key_remetrize"] = {"enabled": True, "init_path": str(V["rvec"])}
+    if V.get("key_transform"):
+        rm_cfg["gnn"]["key_remetrize"]["key_transform"] = V["key_transform"]
     r = np.load(V["rvec"]).astype(np.float32)
     ckpt = REPO / "checkpoints" / V["ckpt_dir"].format(seed=args.seed) / "best_model.pth"
     model = None if args.train_only else _make_model(rm_cfg, ckpt, DEVICE)
@@ -104,7 +107,7 @@ def main():
             graph = causal_pass1_graph(cache, d_raw, rm_cfg, DEVICE, sensor)
             with torch.no_grad():
                 embA = model(graph.to(DEVICE)).cpu().numpy()
-            d_rm = _normalize(d_raw * r[None, :])
+            d_rm = _normalize(key_input(d_raw, rm_cfg) * r[None, :])
             phase_flat = range_phase_flat(_layouts(sensor, seq, cache))
             src, dst, feats, labels = causal_edge_features(
                 embA, d_rm, phase_flat, poses)

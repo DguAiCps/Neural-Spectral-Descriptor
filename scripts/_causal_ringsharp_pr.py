@@ -244,7 +244,9 @@ def run_worker(args, sensor: str, seq: str):
     cache_p = cache_map[(sensor, seq)]
     with np.load(cache_p, allow_pickle=True) as c:
         scan_ids = c["scan_ids"].astype(np.int64)
-        poses = c["poses"].astype(np.float64)
+        # Scoring uses ground-truth poses (poses_gt on odometry-keyframe caches).
+        poses = (c["poses_gt"] if "poses_gt" in c.files
+                 else c["poses"]).astype(np.float64)
     if args.max_frames:
         scan_ids, poses = scan_ids[:args.max_frames], poses[:args.max_frames]
     label = f"{sensor}_{seq}"
