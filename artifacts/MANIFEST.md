@@ -7,7 +7,7 @@ experiments.
 ## Committed Paper-Main Artifacts (in this directory)
 
 These two small files ARE tracked in git and are required by the frozen
-paper-main pipeline (see `PAPER_MAIN_B3.md`):
+paper-main pipeline:
 
 ```text
 artifacts/key_remetrize_r.npy    # 288-float diagonal re-metrization vector r
@@ -48,7 +48,7 @@ _handoff/nsd_encoder_ablation_remote_results/
 ```
 
 These files are historical diagnostics and should not be used to overwrite the
-frozen paper tables without checking `EXPERIMENT_HANDOFF.md`.
+frozen paper tables.
 
 ## Public Bundle Policy
 

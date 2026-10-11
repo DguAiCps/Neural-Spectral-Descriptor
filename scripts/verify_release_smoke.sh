@@ -9,9 +9,7 @@ cleanup_bytecode() {
 trap cleanup_bytecode EXIT
 
 required_files=(
-  RELEASE_800D.md
   DATA.md
-  EXPERIMENT_HANDOFF.md
   README.md
   REPRODUCING.md
   RELEASE_CHECKLIST.md
@@ -48,7 +46,7 @@ for script in \
 done
 
 if grep -R -n -E "0\\.9496|zero-shot performance|older README|Current Sequential|current main upgrade|GAT learns phase|NSD full|full NSD" \
-  README.md RELEASE_800D.md DATA.md EXPERIMENT_HANDOFF.md configs/README.md artifacts/MANIFEST.md >/tmp/nsd_release_stale.txt; then
+  README.md DATA.md configs/README.md artifacts/MANIFEST.md >/tmp/nsd_release_stale.txt; then
   cat /tmp/nsd_release_stale.txt >&2
   echo "stale release wording found" >&2
   exit 1

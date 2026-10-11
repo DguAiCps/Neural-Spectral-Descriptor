@@ -4,13 +4,10 @@ This branch contains the NSD paper code plus appendix ablations. The
 current source of truth is:
 
 0. `REPRODUCING.md` — reviewer-facing guide: every paper table mapped to its command, checkpoints, and result artifact.
-1. `CLAUDE.md` — current paper-main spec (NSD + NSD-H operating points).
-2. `docs/paper/body_v2.1/aaai2027_body.tex` — submitted paper text and reported numbers.
-3. `EXPERIMENT_HANDOFF.md` — full experiment history and interpretation.
-4. `RELEASE_800D.md` — base 800D runbook for students continuing the experiments.
-5. `RELEASE_CHECKLIST.md` — final checks before sharing the code.
-6. `docs/reproducibility_manifest.yaml` — table-to-command, artifact, seed, and external-commit provenance.
-7. `docs/ENVIRONMENT.md` — paper container versus local development environment.
+1. `docs/paper/body_v2.1/aaai2027_body.tex` — submitted paper text and reported numbers.
+2. `RELEASE_CHECKLIST.md` — final checks before sharing the code.
+3. `docs/reproducibility_manifest.yaml` — table-to-command, artifact, seed, and external-commit provenance.
+4. `docs/ENVIRONMENT.md` — paper container versus local development environment.
 
 The old 544D/672D encoder-bandwidth baseline is still present in configs and
 results for ablation context, but it is not the current paper-main path.
@@ -64,12 +61,6 @@ Restore the default paper checkpoint path if the `_handoff` archive is present:
 
 ```bash
 bash scripts/restore_release_artifacts.sh
-```
-
-Read the runbook before launching GPU jobs:
-
-```bash
-less RELEASE_800D.md
 ```
 
 Create a clean source bundle:

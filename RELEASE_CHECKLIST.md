@@ -18,10 +18,8 @@ RUN_TESTS=1 bash scripts/verify_release_smoke.sh
 ## Required Reading Order
 
 1. `README.md`
-2. `RELEASE_800D.md`
-3. `DATA.md`
-4. `artifacts/MANIFEST.md`
-5. `EXPERIMENT_HANDOFF.md`
+2. `DATA.md`
+3. `artifacts/MANIFEST.md`
 
 ## Paper-Main Policy
 

@@ -31,7 +31,7 @@ tar \
   --exclude="*.pyc" \
   --exclude="dist" \
   -czf "$ARCHIVE" \
-  README.md REPRODUCING.md RELEASE_800D.md RELEASE_CHECKLIST.md DATA.md EXPERIMENT_HANDOFF.md \
+  README.md REPRODUCING.md RELEASE_CHECKLIST.md DATA.md \
   docs/ENVIRONMENT.md docs/reproducibility_manifest.yaml \
   artifacts configs scripts src tests \
   requirements.txt setup.py train_multi_dataset.py LICENSE
