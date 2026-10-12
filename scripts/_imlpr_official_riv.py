@@ -411,7 +411,10 @@ def fast_range(points, ring, c):
 
 def fast_frame(xyz, refl, ring, sensor):
     c = SENSORS[sensor]
-    normal = fast_normals(xyz, c["k"])
+    # A scan with no point (MulRan Sejong02's last .bin is 0 bytes) has no official output:
+    # the kNN in compute_normals fails on it. Run-only fix like DiSCO/HeLiOS: no normals,
+    # and the unchanged image code below then gives all-zero channels.
+    normal = fast_normals(xyz, c["k"]) if len(xyz) else np.zeros(0, np.float32)
     img_r = fast_image(xyz, refl, ring, c)
     img_g = fast_range(xyz, ring, c)
     img_n = fast_image(xyz, normal, ring, c)
