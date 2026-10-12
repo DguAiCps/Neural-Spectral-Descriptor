@@ -180,6 +180,7 @@ def _git(*args, check=True) -> str:
 
 def _write_json(path: Path, obj):
     tmp = path.with_suffix(path.suffix + ".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)   # e.g. results/pdv2_seqot_official/ on a fresh checkout
     tmp.write_text(json.dumps(obj, indent=1))
     os.replace(tmp, path)
 
