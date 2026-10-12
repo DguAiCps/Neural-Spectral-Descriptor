@@ -238,9 +238,20 @@ def fill_rng(sensor: str, seq: str, sid: int) -> np.random.Generator:
 def process_accumulated(tb: Toolbox, acc: np.ndarray, rng: np.random.Generator,
                         target: int = 8192, crop: float = 100.0):
     """Toolbox-ordered scan (metres) -> crop, downsample_to_target_size,
-    normalizePointCloud -> (target x 4) float32."""
+    normalizePointCloud -> (target x 4) float32.
+
+    A scan with no point left after the crop (e.g. an empty .bin file) has no
+    official output: downsample_to_target_size would compute `rand() % 0`
+    (utility.cpp:92).  Run-only fix, like DiSCO's empty image: such a scan
+    becomes `target` points at the origin with intensity 0, i.e. exactly what
+    normalizePointCloud returns for an all-origin cloud (origin points are also
+    what the official RemoveRandomPoints augmentation writes).  It is listed by
+    cmd_gen in empty_after_crop_<shard>_of_<n>.txt.  Non-empty scans are
+    untouched by this branch."""
     acc = toolbox_crop(acc, crop)
-    assert len(acc) > 0, "empty scan after crop (official code would divide by zero)"
+    if len(acc) == 0:
+        return (np.zeros((target, 4), np.float32),
+                {"n_crop": 0, "n_vox": 0, "voxel_m": None, "empty_after_crop": True})
     cent, scale = tb.target_centroids(acc, target)
     k = target - len(cent)
     fill = acc[rng.integers(0, len(acc), k)] if k > 0 else acc[:0]
@@ -389,7 +400,7 @@ def cmd_gen(role: str, key: str, shard: int, nshards: int, chunk: int = 400):
     d = seq_dir(role, sensor, seq)
     todo = [int(i) for i in np.flatnonzero(gen)[shard::nshards]
             if not (d / "LiDAR" / f"{int(sids[i]):06d}.bin").exists()]
-    t0, done, max_dt, nvox, n_fallback = time.time(), 0, 0.0, [], 0
+    t0, done, max_dt, nvox, n_fallback, n_empty = time.time(), 0, 0.0, [], 0, 0
     for c in range(0, len(todo), chunk):
         part = todo[c:c + chunk]
         und = {}
@@ -422,6 +433,10 @@ def cmd_gen(role: str, key: str, shard: int, nshards: int, chunk: int = 400):
                     assert dt < 1e-2, (key, sid, dt)
                 pts, info = process_scan(tb, item["points"], fill_rng(sensor, seq, sid), target, crop)
             assert pts.shape == (target, 4)
+            if info.get("empty_after_crop"):
+                with open(d / f"empty_after_crop_{shard}_of_{nshards}.txt", "a") as fe:
+                    fe.write(f"{sid}\n")
+                n_empty += 1
             tmp = out_p.with_name(f".{sid:06d}_{shard}.tmp")
             pts.astype("<f4").tofile(tmp)
             os.replace(tmp, out_p)
@@ -432,7 +447,8 @@ def cmd_gen(role: str, key: str, shard: int, nshards: int, chunk: int = 400):
                       f"({(time.time() - t0) / done:.3f} s/scan)", flush=True)
     print(f"OK gen {role}/{key} shard {shard}/{nshards}: {done} new in "
           f"{time.time() - t0:.0f} s, deskew {dsk['kind'] if dsk else None} "
-          f"(fallback without undistortion: {n_fallback}), median centroids "
+          f"(fallback without undistortion: {n_fallback}), empty after crop (origin "
+          f"placeholder): {n_empty}, median centroids "
           f"{np.median(nvox) if nvox else -1:.0f}, max |pose - cache| {max_dt:.2e} m", flush=True)
 
 
@@ -440,8 +456,11 @@ def cmd_status() -> bool:
     ok = True
     for role, (seqs, _, _, _) in ROLES.items():
         n_all = n_have = 0
+        empties = []
         for sensor, seq in seqs:
             d = seq_dir(role, sensor, seq)
+            for f in sorted(d.glob("empty_after_crop_*.txt")):
+                empties += [f"{sensor}/{seq}:{s}" for s in f.read_text().split()]
             if not (d / "index.npz").exists():
                 print(f"  {role}/{sensor}/{seq}: not indexed")
                 ok = False
@@ -454,7 +473,8 @@ def cmd_status() -> bool:
             if want - have:
                 ok = False
                 print(f"  {role}/{sensor}/{seq}: {len(want & have)}/{len(want)} scans")
-        print(f"{role}: {n_have}/{n_all} scans")
+        print(f"{role}: {n_have}/{n_all} scans"
+              + (f", {len(empties)} empty-after-crop placeholders ({' '.join(empties)})" if empties else ""))
     print("SCANS_COMPLETE" if ok else "SCANS_INCOMPLETE")
     return ok
 
