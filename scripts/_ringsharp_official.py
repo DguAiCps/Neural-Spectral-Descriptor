@@ -80,11 +80,32 @@ PICKLES = REPO / "_external/ringsharp_data_pdv2"      # read-only inputs
 CONFIG = STAGE / "config_nsc_pdv2_official.txt"
 MODEL_CONFIG = RINGSHARP / "glnet/config/ring_sharp_l_nsc.txt"
 OFFICIAL_CONFIG = RINGSHARP / "glnet/config/config_nclt.txt"
-EXP = "ring_sharp_l_nsc_pdv2_official"
+# Seed (env SEED, default 1).  The official trainer seeds torch, torch.cuda
+# and numpy with the constant random_seed = 123 when tools/trainer.py is
+# imported (trainer.py:31-34); Python's `random` (batch sampler,
+# glnet/datasets/samplers.py:35,131) is not seeded by the official code.
+# SEED = 1 is that official run, unchanged.  SEED = k != 1 re-seeds the same
+# three generators with 123 + k - 1 (nothing else) and writes everything
+# training-dependent to its own places; config, training tuples and
+# validation BEVs are shared.
+SEED = int(os.environ.get("SEED", "1"))
+assert SEED >= 1, SEED
+OFFICIAL_TRAINER_SEED = 123
+TRAINER_SEED = OFFICIAL_TRAINER_SEED + SEED - 1
+EXP_BASE = "ring_sharp_l_nsc_pdv2_official"
+EXP = EXP_BASE if SEED == 1 else f"{EXP_BASE}_s{SEED}"
 WDIR = RS_TOOLS / "results/weights" / EXP
-VAL_DIR = rol.OUT_ROOT / "ringsharp_val"
+OUT = rol.OUT_ROOT if SEED == 1 else rol.OUT_ROOT.with_name(f"{rol.OUT_ROOT.name}_s{SEED}")
+LOG_DIR = REPO / ("logs/ring_official" if SEED == 1 else f"logs/ring_official_s{SEED}")
+VAL_DIR = OUT / "ringsharp_val"
 VAL_BEV = rol.CACHE_ROOT / "ringsharp_val_bev"
-SEL = rol.OUT_ROOT / "ringsharp_ckpt_selection.json"
+SEL = OUT / "ringsharp_ckpt_selection.json"
+
+
+def _seed_meta():
+    """Extra output fields for SEED != 1 (SEED = 1 outputs stay as before)."""
+    return {} if SEED == 1 else {"seed": SEED, "trainer_seed": TRAINER_SEED,
+                                 "exp_name": EXP}
 N_RERANK = 1000          # README: evaluate_ours_gl.py --n_rerank 1000
 XCHECK_MAX = 512         # candidates re-scored with the solve_translation loop per check
 BATCH = 128              # evaluate_ours_gl.py rank / rerank batch
@@ -158,7 +179,7 @@ def cmd_prep():
         "train_pickle": str(train), "train_pickle_sha256": _sha_file(train),
         "val_pickle": str(val), "val_pickle_sha256": _sha_file(val),
         "train_manifest": json.loads((PICKLES / "manifest.json").read_text()),
-        "exp_name": EXP,
+        "exp_name": EXP_BASE,
         "env": {"NSC_MICRO_BATCH": "2 by default (16 GB); 1 = upstream full batch"},
         "rule": ("public official code with its default behaviour (config_nclt.txt, "
                  "README --n_rerank 1000); only protocol-required and run-only changes"),
@@ -191,6 +212,25 @@ def cmd_train():
     assert rc == 0, f"RING#-L training failed rc={rc}"
 
 
+def _apply_seed():
+    """SEED != 1: import the official trainer (its module-level seeding with
+    random_seed = 123 runs now), then re-seed the same three generators with
+    TRAINER_SEED; train.py's `from trainer import do_train` reuses this
+    module, so nothing re-seeds afterwards.  SEED = 1: nothing (official).
+    Needs RS_TOOLS on sys.path."""
+    if SEED == 1:
+        return OFFICIAL_TRAINER_SEED
+    import numpy as np
+    import torch
+    import trainer
+    torch.manual_seed(TRAINER_SEED)
+    torch.cuda.manual_seed_all(TRAINER_SEED)
+    np.random.seed(TRAINER_SEED)
+    trainer.random_seed = TRAINER_SEED
+    print(f"SEED {SEED}: trainer seed {TRAINER_SEED} (official 123), exp {EXP}", flush=True)
+    return TRAINER_SEED
+
+
 def _train_worker():
     """Official tools/train.py, unchanged, with the per-sensor band connector."""
     import runpy
@@ -201,6 +241,7 @@ def _train_worker():
     import _ringsharp_band
     cls = _ringsharp_band.install()
     print(f"nsc training dataset class: {cls.__module__}.{cls.__name__}", flush=True)
+    _apply_seed()
     sys.argv = ["train.py", "--config", str(CONFIG), "--model_config",
                 str(MODEL_CONFIG), "--exp_name", EXP]
     runpy.run_path(str(RS_TOOLS / "train.py"), run_name="__main__")
@@ -401,6 +442,7 @@ def cmd_val(epoch, seq, official_loop):
         "bev_bounds": list(rol.ringsharp_bounds(s)),
         "timing": {"feature_s": round(t_feat, 1), "retrieval_s": round(t_ret, 1),
                    "retrieval_ms_per_query": round(1e3 * t_ret / max(n_q, 1), 1)},
+        **_seed_meta(),
     }, indent=2))
     print(f"VAL_DONE e{epoch} {seq}: R@1 {recalls[1]:.4f} ({n_q} q, feat {t_feat:.0f}s, "
           f"ret {t_ret:.0f}s)", flush=True)
@@ -497,7 +539,7 @@ def cmd_select(epochs):
                  "no selection rule (it keeps every epoch and *_final = last)."),
         "selected_epoch": best, "selected_weight": str(w), "weight_sha256": _sha_file(w),
         "official_final_epoch": f"e{EPOCHS}",
-        "epochs": table}, indent=2))
+        "epochs": table, **_seed_meta()}, indent=2))
     print(f"selected {best}: {w.name}", flush=True)
 
 
@@ -548,7 +590,7 @@ def selected_weight():
 def cmd_dump(cond, seq, official_loop, overwrite):
     import torch
     s, q = _split(seq, TEST)
-    out_dir = rol.OUT_ROOT / cond
+    out_dir = OUT / cond
     out = out_dir / f"dump_ringsharp_{s}_{q}.npz"
     if out.exists() and not overwrite:
         print(f"SKIP {out.name}", flush=True)
@@ -616,6 +658,7 @@ def cmd_dump(cond, seq, official_loop, overwrite):
                       "weight_selection": str(SEL), "weight_selection_rule": sel["rule"],
                       "keyframe_cache": str(cache)},
         "train_overlap": False,
+        **_seed_meta(),
         "timing": {"feature_s_total": round(t_feat, 1),
                    "feature_s_per_kf": round(t_feat / n, 4),
                    "ledger_s_total": round(t_led, 1),
@@ -798,7 +841,7 @@ def main():
     p.add_argument("--poll", type=int, default=60)
     p.add_argument("--min-age", type=int, default=120,
                    help="seconds a checkpoint must be old before it is read")
-    p.add_argument("--log-dir", default=str(REPO / "logs/ring_official"))
+    p.add_argument("--log-dir", default=str(LOG_DIR))
     p = sub.add_parser("val-bev")
     p.add_argument("--seq", required=True)
     p = sub.add_parser("val")

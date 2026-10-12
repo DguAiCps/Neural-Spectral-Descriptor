@@ -278,9 +278,11 @@ def cmd_dump(cond, seq, variants, official_scorer, overwrite):
 
 
 # ------------------------------------------------------------------ aggregate
-def cmd_aggregate(cond):
+def cmd_aggregate(cond, root=None):
+    """root: results root holding {cond}/dump_*.npz (default rol.OUT_ROOT;
+    RING#-L seeds != 1 pass their own root, see _ringsharp_official.OUT)."""
     from _pr_eval_lib import AGG_METRICS, MATCH_RADIUS_M, classify_queries, pr_sweep
-    out_dir = rol.OUT_ROOT / cond
+    out_dir = (Path(root) if root else rol.OUT_ROOT) / cond
     summary = {"_meta": {"condition": cond, "n_test_sequences": len(TEST),
                          "score_columns": SCORE_COLS,
                          "groups": "sequence mean within a group, groups "
@@ -497,6 +499,8 @@ def main():
             p.add_argument("--overwrite", action="store_true")
     p = sub.add_parser("aggregate")
     p.add_argument("--cond", choices=("odom", "gt"), default="odom")
+    p.add_argument("--root", default=None,
+                   help="results root (default results/pdv2_ring_official)")
     sub.add_parser("check")
     sub.add_parser("gpu-check")
     sub.add_parser("roster")
@@ -507,7 +511,7 @@ def main():
     elif a.cmd == "dump":
         cmd_dump(a.cond, a.seq, variants, a.official_scorer, a.overwrite)
     elif a.cmd == "aggregate":
-        cmd_aggregate(a.cond)
+        cmd_aggregate(a.cond, a.root)
     elif a.cmd == "check":
         cmd_check()
     elif a.cmd == "gpu-check":

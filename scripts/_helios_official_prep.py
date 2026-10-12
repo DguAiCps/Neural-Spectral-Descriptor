@@ -93,7 +93,9 @@ WORK = REPO / "_external/helios_official_pdv2"
 DATA = WORK / "data"                 # official `dataset_folder`
 V2 = REPO / "data/preprocessed_v2"
 ODOM = REPO / "data/preprocessed_v2_odom"
-SEED = 1
+# seed of the reproducible random fill (fill_rng); FIXED at 1 and not read from
+# the environment: the prepared scans are shared by every training seed
+FILL_SEED = 1
 LOG_DIR = REPO / "logs/baseline_official_20261011"
 # role -> (sequence list, cache dir, cache-name middle, pose key in cache)
 ROLES = {
@@ -230,7 +232,7 @@ def toolbox_accumulate(points: np.ndarray, crop: float = 100.0) -> np.ndarray:
 
 
 def fill_rng(sensor: str, seq: str, sid: int) -> np.random.Generator:
-    return np.random.default_rng([SEED, zlib.crc32(f"{sensor}/{seq}".encode()), int(sid)])
+    return np.random.default_rng([FILL_SEED, zlib.crc32(f"{sensor}/{seq}".encode()), int(sid)])
 
 
 def process_accumulated(tb: Toolbox, acc: np.ndarray, rng: np.random.Generator,

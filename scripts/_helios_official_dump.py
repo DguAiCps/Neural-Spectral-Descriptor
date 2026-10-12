@@ -56,20 +56,20 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(REPO), str(REPO / "src"), str(REPO / "scripts")]
 
 import _helios_official_prep as P  # noqa: E402
+import _helios_official_train as TR  # noqa: E402  (SEED and seed-specific paths)
 from _causal_bevplace_pr import ledger  # noqa: E402  (torch-free, unchanged)
 from _pdv2_pilot import TEST, VAL  # noqa: E402
 from _pr_eval_lib import MIN_INDEX_GAP  # noqa: E402
 
-RESULTS = REPO / "results/pdv2_helios_official"
+RESULTS = TR.RESULTS          # results/pdv2_helios_official[_s<SEED>]
 OUT = RESULTS / "odom"
-RECORD = RESULTS / "train_record.json"
+RECORD = TR.RECORD
 SELECTION = RESULTS / "train_selection.json"
 METHOD = "helios"
 SKIP, RADIUS = 30, 5.0
 
 
 def _official(config_path: Path | None = None):
-    import _helios_official_train as TR
     TR.official_path()
     import eval.evaluate as E
     from misc.utils import TrainingParams
@@ -226,7 +226,7 @@ def encode_and_dump(E, params, model, sensor, q, out_path, checkpoint, device, l
     pm = json.loads((P.seq_dir("test_odom", sensor, q) / "meta.json").read_text())
     meta = {
         "schema": "pr-dump-v1", "method": METHOD,
-        "variant": "official HeLiOS recipe retrained on split-v2 train",
+        "variant": "official HeLiOS recipe retrained on split-v2 train" + ("" if TR.SEED == 1 else f", seed {TR.SEED}"),
         "sensor": sensor, "sequence": q, "min_index_gap": MIN_INDEX_GAP,
         "n_frames": int(len(desc)), "n_queries": int(len(arrays["query_idx"])),
         "primary_score": "score_cos",
@@ -256,6 +256,8 @@ def encode_and_dump(E, params, model, sensor, q, out_path, checkpoint, device, l
         "timing": {"encode_s": round(t_enc, 1), "encode_ms_per_kf": round(t_enc / max(len(desc), 1) * 1e3, 2),
                    "ledger_s": round(t_led, 1)},
     }
+    if TR.SEED != 1:
+        meta["train_seed"] = TR.SEED
     meta.update(extra_meta or {})
     out_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(out_path, meta=json.dumps(meta), **arrays)
@@ -310,6 +312,7 @@ def cmd_aggregate():
     s["_meta"].pop("seqot", None)   # hard-coded note of the reused aggregator
     sel = json.loads(SELECTION.read_text())
     s["_meta"][METHOD] = ("official HeLiOS recipe retrained on split-v2 train "
+                          + ("" if TR.SEED == 1 else f"(seed {TR.SEED}) ") +
                           "(scripts/_helios_official_train.py), checkpoint "
                           f"{sel['chosen']} = {sel[sel['chosen']]['name']}; {SELECTION.relative_to(REPO)}")
     p.write_text(json.dumps(s, indent=2))
@@ -336,7 +339,6 @@ def selftest(out_json: Path):
         rep[f"recall_{s}_{q}"] = {"r1": r1, "ref": ref[1], "n_queries": nq, "equal_incl_top1": bool(same)}
         print(json.dumps(rep[f"recall_{s}_{q}"]), flush=True)
     # official get_latent_vectors + ledger on 80 test keyframes, stand-in network
-    import _helios_official_train as TR
     from _pd_build_test_caches import _make_loader
     sensor, q, n = "nclt", "2013-01-10", 80
     tb = P.Toolbox()
@@ -404,7 +406,7 @@ def main():
     p.add_argument("--overwrite", action="store_true")
     sub.add_parser("aggregate")
     p = sub.add_parser("selftest")
-    p.add_argument("--out-json", type=Path, default=P.LOG_DIR / "helios_selftest_dump.json")
+    p.add_argument("--out-json", type=Path, default=P.LOG_DIR / f"helios_selftest_dump{TR.SFX}.json")
     a = ap.parse_args()
     if a.cmd == "select":
         cmd_select(a.chosen, "cuda")

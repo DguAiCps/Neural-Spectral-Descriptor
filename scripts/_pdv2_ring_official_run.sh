@@ -22,6 +22,13 @@
 #                         1 = upstream full-batch step, fine on 96 GB cards)
 #   JOBS                  RING/RING++ BEV sequences built in parallel (default 1);
 #                         each job gets nproc/JOBS threads for k-NN / eigen
+#   SEED                  RING#-L seed (default 1 = the official trainer seed 123,
+#                         paths as before). SEED=k != 1: trainer seed 123+k-1 and
+#                         own weights (exp ..._s{k}), validation, selection,
+#                         ledgers and summary (results/pdv2_ring_official_s{k}/),
+#                         logs (logs/ring_official_s{k}/); config, training tuples
+#                         and validation BEVs are shared. RING / RING++ have no
+#                         seed: ring-* stages refuse SEED != 1.
 # GPU stages: ring-bev (small CUDA kernels + CPU k-NN), ring-dump, rs-microcheck,
 # rs-train, rs-val, rs-dump.  CPU only: checks (first two lines), rs-prep,
 # rs-valbev, rs-select, *-agg.
@@ -33,7 +40,13 @@ EPOCHS=${EPOCHS:-$(seq 1 30)}
 JOBS=${JOBS:-1}
 RS_TRAIN_GPU=${RS_TRAIN_DEVICE:-cuda:0}; RS_TRAIN_GPU=${RS_TRAIN_GPU#cuda:}
 RS_VAL_GPU=${RS_VAL_DEVICE:-}; RS_VAL_GPU=${RS_VAL_GPU#cuda:}
-LOG=logs/ring_official
+SEED=${SEED:-1}
+export SEED
+if [ "$SEED" = 1 ]; then
+  LOG=logs/ring_official; RS_ROOT_ARGS=()
+else
+  LOG=logs/ring_official_s$SEED; RS_ROOT_ARGS=(--root "results/pdv2_ring_official_s$SEED")
+fi
 mkdir -p "$LOG"
 TEST=$(python3 scripts/_ring_official_pr.py roster)
 VALSEQ=$(python3 scripts/_pdv2_pilot.py roster --role val)
@@ -52,7 +65,7 @@ ring_bev_parallel() {  # JOBS > 1: several sequences at once, threads split even
   local threads=$(( $(nproc) / JOBS )); [ "$threads" -lt 1 ] && threads=1
   echo "[$(date '+%F %T')] ring-bev: $JOBS jobs x $threads threads" | tee -a "$LOG/chain.log"
   local out
-  out=$(printf '%s\n' $TEST | xargs -P "$JOBS" -I{} env OMP_NUM_THREADS="$threads" \
+  out=$(printf '%s\n' $TEST | xargs -r -P "$JOBS" -I{} env OMP_NUM_THREADS="$threads" \
       MKL_NUM_THREADS="$threads" OPENBLAS_NUM_THREADS="$threads" LOKY_MAX_CPU_COUNT="$threads" \
       bash -c 'n=${2//\//_}; python3 scripts/_ring_official_pr.py bev --cond "$1" --seq "$2" \
                > "$0/bev_$1_$n.log" 2>&1 && echo "OK $2" || echo "FAILED bev_$1_$n"' \
@@ -83,6 +96,10 @@ rs_train_with_val_watch() {  # training on RS_TRAIN_GPU, per-epoch validation on
 
 for stage in "$@"; do
   case $stage in
+    ring-bev|ring-dump|ring-agg)
+      if [ "$SEED" != 1 ]; then echo "$stage has no seed (RING/RING++ are not trained); run it with SEED unset"; exit 2; fi ;;
+  esac
+  case $stage in
     checks)
       step check_ring_cpu env CUDA_VISIBLE_DEVICES= python3 scripts/_ring_official_pr.py check
       step check_rs_cpu env CUDA_VISIBLE_DEVICES= python3 scripts/_ringsharp_official.py check
@@ -93,8 +110,10 @@ for stage in "$@"; do
       fi ;;
     ring-dump)
       for s in $TEST; do step "dump_ring_${COND}_${s//\//_}" python3 scripts/_ring_official_pr.py dump --cond "$COND" --seq "$s"; done ;;
-    ring-agg|rs-agg)
+    ring-agg)
       step "aggregate_${COND}" python3 scripts/_ring_official_pr.py aggregate --cond "$COND" ;;
+    rs-agg)
+      step "aggregate_${COND}" python3 scripts/_ring_official_pr.py aggregate --cond "$COND" ${RS_ROOT_ARGS[@]+"${RS_ROOT_ARGS[@]}"} ;;
     rs-prep)
       step rs_prep python3 scripts/_ringsharp_official.py prep ;;
     rs-microcheck)

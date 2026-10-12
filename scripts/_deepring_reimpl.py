@@ -20,7 +20,9 @@ docstring lists what was checked).  This driver chains:
              episodes of 24 classes x (1 shot + 6 queries) inside one training
              sequence; sinogram = RING repo utils.core.generate_RING on the
              BEV (GPU); M_f = |row DFT(UNet(sinogram))|; eq. 8 correlation;
-             eq. 9 W C + b; cross entropy.  Seed 1.  Every epoch: split-v2 VAL
+             eq. 9 W C + b; cross entropy.  Seed = env SEED (default 1;
+             other seeds: runs/s<SEED>, results/pdv2_deepring_reimpl_s<SEED>).
+             Every epoch: split-v2 VAL
              intra-sequence 5 m R@1 with a 30-keyframe gap (past and future
              candidates, compute_recall_multi_k semantics, ranking by the
              DeepRING logit W C + b over all frames), families weighted
@@ -75,11 +77,23 @@ ROLES = {"train": (TRAIN, V2, "", "poses"),
          "test_odom": (TEST, ODOM, "test_", "poses_gt")}
 WORK = REPO / "_external/deepring_reimpl_pdv2"
 BEV_ROOT = WORK / "bev"
-RUN_DIR = WORK / "runs/s1"
-RESULTS = REPO / "results/pdv2_deepring_reimpl"
+
+
+def _seed_from_env() -> int:
+    """Training seed from the environment variable SEED (default 1)."""
+    raw = os.environ.get("SEED") or "1"
+    assert raw.isdigit() and raw[0] != "0", f"SEED must be a positive integer, got {raw!r}"
+    return int(raw)
+
+
+SEED = _seed_from_env()
+# training-dependent locations: unchanged for seed 1, own dirs for other seeds;
+# BEV caches (BEV_ROOT) are shared by all seeds
+RUN_DIR = WORK / f"runs/s{SEED}"
+RESULTS = REPO / ("results/pdv2_deepring_reimpl" if SEED == 1
+                  else f"results/pdv2_deepring_reimpl_s{SEED}")
 SELECTION = RESULTS / "train_selection.json"
 METHOD = "deepring"
-SEED = 1
 SHARD = 1000
 EMBED_BATCH = 256
 VAL_RADIUS, VAL_SKIP = 5.0, 30

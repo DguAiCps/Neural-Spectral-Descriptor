@@ -26,7 +26,7 @@ Recipe (all official defaults): Adam lr 1e-5 for the network (constant:
 get_learning_rate(0) only), Adam lr 1e-3 for Corr2Softmax, 20 epochs, one
 query per step (cfg.BATCH_NUM_QUERIES = 1; --batch_num_queries is parsed but
 never applied), single GPU (train_DiSCO.py:26), no weight decay, no seed in
-the official code (we seed 1, user rule).
+the official code (we seed SEED from the environment, default 1, user rule).
 
 What this file replaces (each marked in the code):
   1. data: the official pickle of NCLT 2012-02-04 tuples (generator
@@ -89,13 +89,13 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(REPO), str(REPO / "src"), str(REPO / "scripts")]
 
 from _disco_official_prep import (  # noqa: E402
-    GENERATOR, OFFICIAL, OFFICIAL_COMMIT, OFFICIAL_REPO, RESULTS, WORK, import_official,
-    load_store, official_env, seq_name, sha256, unpack)
+    GENERATOR, OFFICIAL, OFFICIAL_COMMIT, OFFICIAL_REPO, RESULTS, SEED, WORK, import_official,
+    load_store, official_env, seeded, seq_name, sha256, unpack)
 from _pdv2_pilot import TRAIN, VAL  # noqa: E402
 
-RUNS = WORK / "runs"
+RUNS = seeded(WORK / "runs")          # SEED from the environment (default 1)
+SMOKE = seeded(WORK / "smoke")
 SELECTION = RESULTS / "train_selection.json"
-SEED = 1
 POS_R, NEG_R = 1.5, 2.0       # generator construct_query_dict (lines 160, 163)
 SKIP, RADIUS = 30, 5.0        # v2 validation (compute_recall_multi_k semantics)
 
@@ -333,14 +333,14 @@ def train(args, official_argv):
     queries, sizes = build_train(bank, args.smoke)                # replacement 1
     val_sets = make_val_sets(bank, args.smoke)
     smoke = bool(args.smoke)
-    sel_path = args.selection_out or (WORK / "smoke/train_selection.json" if smoke else SELECTION)
+    sel_path = args.selection_out or (SMOKE / "train_selection.json" if smoke else SELECTION)
     if args.resume:
         run_dir = Path(args.resume)
         log = run_dir / "log_train.txt"
         if log.exists():   # train_DiSCO.py opens it with 'w' at import
             log.rename(run_dir / f"log_train.before_resume_{datetime.now():%m%d_%H%M%S}.txt")
     else:
-        base = WORK / "smoke/runs" if smoke else RUNS
+        base = SMOKE / "runs" if smoke else RUNS
         base.mkdir(parents=True, exist_ok=True)
         run_dir = base / datetime.now().strftime("%b%d_%H-%M-%S")
     T = load_train_module(run_dir, official_argv, queries)

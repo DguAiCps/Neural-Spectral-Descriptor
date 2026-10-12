@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -43,10 +44,12 @@ from _imlpr_official_riv import (  # noqa: E402
 from _pdv2_pilot import TEST  # noqa: E402
 from _pr_eval_lib import MIN_INDEX_GAP  # noqa: E402
 
-RESULTS = REPO / "results/pdv2_imlpr_official"
+SEED = int(os.environ.get("SEED", "1"))      # seed 1: original locations
+SFX = "" if SEED == 1 else f"_s{SEED}"
+RESULTS = REPO / f"results/pdv2_imlpr_official{SFX}"
 OUT = RESULTS / "odom"
 SELECTION = RESULTS / "train_selection.json"
-DESC = WORK / "desc"
+DESC = WORK / f"desc{SFX}"
 METHOD = "imlpr"
 
 
@@ -205,7 +208,6 @@ def cmd_dry_run_cpu(key, n, out_dir):
     ledger compared with the SeqOT ledger of the same sequence in
     results/pdv2_c3/odom (same keyframes and GT positions -> identical
     query_idx / min_past_gt_dist / n_candidates on the shared rows)."""
-    import os
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
     import torch
     torch.set_num_threads(4)

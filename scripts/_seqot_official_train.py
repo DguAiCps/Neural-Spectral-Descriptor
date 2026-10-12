@@ -92,9 +92,18 @@ from _seqot_official_prep import (  # noqa: E402
     WORK, _git, _write_json, label_dir, official_config, official_imports, open_store,
     range_image, seq_name, sha256)
 
-RUNS = WORK / "runs"
-SUBDESC = WORK / "subdesc"
-SELECTION = RESULTS / "train_selection.json"
+# Seeds.  Prep side (shared by all seeds): the label sampling np.random.seed
+# of _seqot_official_prep is _pdv2_pilot.SEED = 1, fixed.  Training side:
+# env SEED (default 1) seeds torch / numpy / random before model creation
+# (phase-1 initial weights; nothing else in training draws random numbers).
+TRAIN_SEED = int(os.environ.get("SEED") or 1)
+# SEED = 1 keeps the original locations; other seeds get their own copies of
+# everything training-dependent (range images, frames, labels, config shared).
+SEED_WORK = WORK if TRAIN_SEED == 1 else WORK / f"s{TRAIN_SEED}"
+SEED_RESULTS = RESULTS if TRAIN_SEED == 1 else RESULTS.with_name(f"{RESULTS.name}_s{TRAIN_SEED}")
+RUNS = SEED_WORK / "runs"
+SUBDESC = SEED_WORK / "subdesc"
+SELECTION = SEED_RESULTS / "train_selection.json"
 OVERLAP_THRESH = 0.3        # training_seqot.py:51, training_gem.py:54; paper III-C
 MARGIN_1 = 0.5              # training_seqot.py:152, training_gem.py:155; paper alpha
 STEP_SIZE, GAMMA = 5, 0.9   # StepLR, training_seqot.py:47, training_gem.py:45; paper "0.9 every 5"
@@ -131,7 +140,7 @@ def official():
     return _OFF
 
 
-def seed_all(seed=SEED):
+def seed_all(seed=TRAIN_SEED):
     import torch
     random.seed(seed)
     np.random.seed(seed)
@@ -400,7 +409,7 @@ def cmd_train1(epochs, lr, smoke):
     meta = {"official_commit": OFFICIAL_COMMIT, "lr": lr, "epochs": f"1..{epochs - 1}",
             "anchors_per_epoch": len(plan), "anchors_per_sequence": _plan_meta(plan, len(TRAIN)),
             "use_pos_neg": USE1, "window": TRAIN_WINDOW, "negative_rule": NEG_RULE,
-            "labels": _label_meta(), "seed": SEED, "device": str(dev),
+            "labels": _label_meta(), "seed": TRAIN_SEED, "device": str(dev),
             "torch": torch.__version__, **_recipe_meta(1)}
     run_dir.mkdir(parents=True, exist_ok=True)
     _write_json(run_dir / "meta.json", meta)
@@ -683,7 +692,7 @@ def cmd_train2(epochs, lr):
                                         "anchors_per_epoch": len(plan),
                                         "anchors_per_sequence": _plan_meta(plan, len(TRAIN)),
                                         "use_pos_neg": USE2, "window": TRAIN_WINDOW,
-                                        "negative_rule": NEG_RULE, **_recipe_meta(2), "seed": SEED,
+                                        "negative_rule": NEG_RULE, **_recipe_meta(2), "seed": TRAIN_SEED,
                                         "stage1": _load_sel()["stage1"]["chosen"]})
     train_phase("gem", plan, sources, run_dir, lr, epochs, dev, log=run_dir / "log.jsonl")
     (run_dir / "finished").write_text(f"{epochs - 1}\n")
@@ -1076,11 +1085,11 @@ def selftest_resume(rep, td):
     src = DescSource(descs)
     plan = anchor_plan([parse_index(arr)], lambda d, a: all(src.exists(int(x)) for x in centered(a, GEM_SEQLEN)), *USE2)
     with contextlib.redirect_stdout(io.StringIO()):
-        seed_all()
+        seed_all(SEED)
         train_phase("gem", plan, [src], td / "r_a", 5e-3, 13, torch.device("cpu"), start_epoch=0, quiet=True)
-        seed_all()
+        seed_all(SEED)
         train_phase("gem", plan, [src], td / "r_b", 5e-3, 7, torch.device("cpu"), start_epoch=0, quiet=True)
-        seed_all()
+        seed_all(SEED)
         train_phase("gem", plan, [src], td / "r_b", 5e-3, 13, torch.device("cpu"), quiet=True)
     a = torch.load(td / "r_a" / "amodel_gem12.pth.tar", weights_only=False)
     b = torch.load(td / "r_b" / "amodel_gem12.pth.tar", weights_only=False)

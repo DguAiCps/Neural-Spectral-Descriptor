@@ -43,7 +43,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(REPO), str(REPO / "src"), str(REPO / "scripts")]
 
 from _disco_official_prep import (  # noqa: E402
-    OFFICIAL_COMMIT, OFFICIAL_REPO, RESULTS, RULE, cache_path, load_store, seq_name,
+    OFFICIAL_COMMIT, OFFICIAL_REPO, RESULTS, RULE, SEED, cache_path, load_store, seq_name,
     sha256, store_dir)
 from _pdv2_pilot import TEST  # noqa: E402
 from _pr_eval_lib import MIN_INDEX_GAP  # noqa: E402
@@ -158,7 +158,7 @@ def encode_and_dump(EV, model, bank, sensor, q, out_path, checkpoint, chosen,
     meta = {
         "schema": "pr-dump-v1",
         "method": METHOD,
-        "variant": "official DiSCO-pytorch recipe retrained on split-v2 train (seed 1)",
+        "variant": f"official DiSCO-pytorch recipe retrained on split-v2 train (seed {SEED})",
         "sensor": sensor, "sequence": q,
         "min_index_gap": MIN_INDEX_GAP,
         "n_frames": int(n),
@@ -259,7 +259,7 @@ def cmd_aggregate():
     s["_meta"].pop("seqot", None)   # hard-coded note of the reused aggregator
     sel = json.loads(SELECTION.read_text())
     s["_meta"][METHOD] = (f"official DiSCO-pytorch recipe retrained on split-v2 train, "
-                          f"seed 1, checkpoint '{sel.get('chosen')}' of "
+                          f"seed {SEED}, checkpoint '{sel.get('chosen')}' of "
                           f"{SELECTION.relative_to(REPO)}")
     p.write_text(json.dumps(s, indent=2))
 

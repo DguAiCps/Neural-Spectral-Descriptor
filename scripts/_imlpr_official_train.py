@@ -89,14 +89,20 @@ from _imlpr_official_riv import (  # noqa: E402
     DATA, OFFICIAL, OFFICIAL_COMMIT, SENSORS, TRAIN_H, WORK, role_dir, seq_name, sha256)
 from _pdv2_pilot import TRAIN, VAL  # noqa: E402
 
-RESULTS = REPO / "results/pdv2_imlpr_official"
+# Seed (env SEED, default 1).  Seed 1 keeps the original locations; any other
+# seed gets its own copies of everything that depends on training (config with
+# its num_workers, run dir, smoke dir, selection record).  Shared across seeds:
+# RIVs, index, training pickles, model config, DINOv2 hub copy.
+SEED = int(os.environ.get("SEED", "1"))
+SFX = "" if SEED == 1 else f"_s{SEED}"
+RESULTS = REPO / f"results/pdv2_imlpr_official{SFX}"
 SELECTION = RESULTS / "train_selection.json"
-CONFIG = WORK / "config_pdv2.txt"
+CONFIG = WORK / f"config_pdv2{SFX}.txt"
 OFFICIAL_MODEL_CONFIG = OFFICIAL / "config/config_model_imlpr.txt"
 MODEL_CONFIG = WORK / "config_model_pdv2.txt"     # written by model_config_text()
-RUNS = WORK / "runs"
+RUNS = WORK / f"runs{SFX}"
+SMOKE = WORK / f"smoke{SFX}"
 MODEL_NAME = "ImLPR_pdv2_official"
-SEED = 1
 PAD = 28                     # evaluate.py:92 / base_datasets.py:25
 FAISS_BLOCK = 19             # < faiss BLAS threshold (20): bit-identical to one-by-one
 SKIP, RADIUS = 30, 5.0
@@ -847,8 +853,8 @@ def cmd_smoke(mode: str, val_frames: int, val_batch: int, val_workers: int):
     off = load_official()
     params, cfg_text = _params(mode)
     params.epochs, params.debug = 1, True
-    run_dir = WORK / "smoke/runs"
-    out = WORK / "smoke/train_selection.json"
+    run_dir = SMOKE / "runs"
+    out = SMOKE / "train_selection.json"
     record = {"_meta": _meta(mode, cfg_text, run_dir, smoke=True), "evals": [], "epochs": []}
     off.TR._set_seed(SEED, deterministic=False)
     install_collate_patch()

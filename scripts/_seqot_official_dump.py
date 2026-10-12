@@ -51,9 +51,11 @@ from _seqot_official_prep import (  # noqa: E402
     BACK, FOV, GEM_SEQLEN, OFFICIAL_COMMIT, OFFICIAL_REPO, RESULTS, SEED, SEQL, TEST,
     WORK, cache_path, range_image, seq_name, sha256, store_dir)
 from _pr_eval_lib import MIN_INDEX_GAP  # noqa: E402
+from _seqot_official_train import (  # noqa: E402  (torch-free at import)
+    SEED_RESULTS, SEED_WORK, SELECTION, TRAIN_SEED)
 
-OUT = RESULTS / "odom"
-DESC = WORK / "desc" / "test_odom"
+OUT = SEED_RESULTS / "odom"                  # SEED = 1: results/pdv2_seqot_official/odom
+DESC = SEED_WORK / "desc" / "test_odom"      # SEED = 1: _external/seqot_official_pdv2/desc/test_odom
 METHODS = {"seqot": "score_cos", "seqotl2": "score_l2"}
 REPORTED = "seqotl2"   # user decision 2026-10-11: official L2 retrieval
 
@@ -93,13 +95,13 @@ def _meta(sensor, q, n, arrays, score, extra):
          "official": {"repo": OFFICIAL_REPO, "commit": OFFICIAL_COMMIT,
                       "code": "modules/seqTransformerCat.featureExtracter, modules/gem.GeM, "
                               "tools/utils/utils.range_projection"},
-         "fov_up_down_deg": list(FOV[sensor]), "seed": SEED,
+         "fov_up_down_deg": list(FOV[sensor]), "seed": TRAIN_SEED,
          "reported": (score == METHODS[REPORTED]),
          "reported_note": f"{REPORTED} (official L2) is the reported SeqOT ledger; "
                           "seqot (cosine, prereg §1.5) is a record",
          "training": "official code defaults (lr 5e-7 / 99 ep, GeM 5e-6 / 99 ep, 3+3 / 6+6, "
                      "centred windows, code overlap); epochs chosen on v2 VAL, "
-                     "results/pdv2_seqot_official/train_selection.json"}
+                     f"{SELECTION.relative_to(REPO)}"}
     m.update(extra)
     return m
 
@@ -152,7 +154,7 @@ def run_worker(sensor, q, batch):
              stage1_sha256=c1["sha256"], stage2_sha256=c2["sha256"])
     rmeta = json.loads((store_dir("test_odom", sensor, q) / "meta.json").read_text())
     extra = {"artifacts": {"stage1": c1, "stage2": c2,
-                           "selection": str((RESULTS / "train_selection.json").relative_to(REPO))},
+                           "selection": str(SELECTION.relative_to(REPO))},
              "caches": {"operating_cache": str(cp.relative_to(REPO)),
                         "operating_cache_sha256": rmeta["cache_sha256"],
                         "positions": "poses_gt (scoring only)",
@@ -186,7 +188,7 @@ def cmd_dump(seqs, worker, overwrite, batch):
 
 def cmd_aggregate():
     import _pdv2_c3 as c3
-    c3.OUT_ROOT = RESULTS
+    c3.OUT_ROOT = SEED_RESULTS
     c3.BASELINES = dict(METHODS)
     c3.cmd_aggregate_baselines("odom")
     p = OUT / "pr_summary_baselines.json"
@@ -195,8 +197,10 @@ def cmd_aggregate():
                            "(scripts/_seqot_official_train.py), epochs chosen on v2 VAL by "
                            "L2 R@1; REPORTED = seqotl2 (official L2 retrieval), seqot = "
                            "cosine record (prereg §1.5); "
-                           "results/pdv2_seqot_official/train_selection.json")
+                           f"{SELECTION.relative_to(REPO)}")
     s["_meta"]["reported"] = REPORTED
+    if TRAIN_SEED != 1:     # SEED = 1 output unchanged
+        s["_meta"]["train_seed"] = TRAIN_SEED
     p.write_text(json.dumps(s, indent=2))
 
 
@@ -222,7 +226,7 @@ def cmd_dry_run_cpu(key, n, out_dir):
     src = DictSource({r: range_image(sensor, L[r]["points"]) for r in need})
     src.n_raw, src.kf = len(L), kf
     t_proj = time.time() - t0
-    seed_all()
+    seed_all(SEED)          # format check: fixed seed, independent of env SEED
     fe = official()["featureExtracter"](seqL=SEQL).eval()
     gem = official()["GeM"]().eval()
     final, need2, t_enc = encode_sequence(fe, gem, torch.device("cpu"), src, 16)

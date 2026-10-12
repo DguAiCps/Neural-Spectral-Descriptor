@@ -21,6 +21,11 @@
 #     bash scripts/_pdv2_imlpr_official_run.sh hub index selftest riv pickle smoke
 #   docker exec -w /workspace/Neural-Spectral-Codec ring_baseline \
 #     bash scripts/_pdv2_imlpr_official_run.sh train test aggregate
+# SEED (default 1): seed 1 uses the original locations; SEED=k writes everything
+# training-dependent to *_s{k} (config, runs, smoke, logs, results, descriptors,
+# ledgers) and shares RIVs / index / pickles / hub with seed 1 (for k != 1:
+# `index` skips if present, `pickle` only writes the seed's config, `test`
+# keeps the shared test RIVs unless KEEP_TEST_RIV=0).
 # Knobs: NPROC (RIV processes, default 12), NUM_WORKERS (official DataLoader
 # workers, default 4; official 16 needs ~110 GB of shared memory),
 # PICKLE_MODE (default global = official), CUDA_VISIBLE_DEVICES (official
@@ -39,20 +44,26 @@ export PYTHONDONTWRITEBYTECODE=1
 W=_external/imlpr_official_pdv2
 export TORCH_HOME="$PWD/$W/torch_hub"
 DINO_SHA=b938bf1bc15cd2ec0feacfe3a1bb553fe8ea9ca46a7e1d8d00217f29aef60cd9
-LOG=logs/imlpr_official_pdv2
-SEL=results/pdv2_imlpr_official/train_selection.json
+SEED=${SEED:-1}
+export SEED
+SFX=""
+[ "$SEED" -eq 1 ] || SFX="_s$SEED"
+LOG=logs/imlpr_official_pdv2$SFX
+SEL=results/pdv2_imlpr_official$SFX/train_selection.json
 R="python3 scripts/_imlpr_official_riv.py"
 T="python3 scripts/_imlpr_official_train.py"
 D="python3 scripts/_imlpr_official_dump.py"
 NPROC=${NPROC:-12}
 NUM_WORKERS=${NUM_WORKERS:-4}
+KEEP_DEFAULT=0
+[ "$SEED" -eq 1 ] || KEEP_DEFAULT=1   # shared test RIVs are kept for seeds != 1
 PICKLE_MODE=${PICKLE_MODE:-global}
 export IMLPR_PICKLE_MODE=$PICKLE_MODE
 mkdir -p "$LOG"
 say() { echo "[imlpr-official] $* ($(date '+%F %T'))"; }
 
 gen_jobs() {  # stdin: "role seq shard nshards" lines -> parallel single-thread workers
-  xargs -P "$NPROC" -L 1 bash -c \
+  xargs -r -P "$NPROC" -L 1 bash -c \
     'OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
      python3 scripts/_imlpr_official_riv.py gen --role "$0" --seq "$1" --shard "$2" --nshards "$3" \
        >> "'"$LOG"'/riv_$0_${1//\//_}.log" 2>&1'
@@ -67,9 +78,9 @@ stage_selftest() {
   CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=4 $T selftest \
     --out-json "$LOG/selftest_train.json" > "$LOG/selftest_train.log" 2>&1
   tail -1 "$LOG/selftest_train.log"
-  rm -rf "$W/dryrun"
+  rm -rf "$W/dryrun$SFX"
   CUDA_VISIBLE_DEVICES= OMP_NUM_THREADS=4 $D dry-run-cpu --seq nclt/2013-01-10 --n 80 \
-    --out-dir "$W/dryrun" > "$LOG/selftest_dryrun.log" 2>&1
+    --out-dir "$W/dryrun$SFX" > "$LOG/selftest_dryrun.log" 2>&1
   tail -1 "$LOG/selftest_dryrun.log"
 }
 
@@ -93,6 +104,9 @@ stage_hub() {
 }
 
 stage_index() {
+  if [ "$SEED" -ne 1 ] && [ -f "$W/data/test_odom/nclt_2013-02-23/index.npz" ]; then
+    say "index: shared with seed 1, skip"; return
+  fi
   say index
   $R index > "$LOG/index.log" 2>&1
   tail -3 "$LOG/index.log"
@@ -106,16 +120,37 @@ stage_riv() {
 
 stage_pickle() {
   $R status --role train > /dev/null || { echo "train RIVs incomplete"; exit 1; }
-  say "pickle ($PICKLE_MODE) + config (num_workers $NUM_WORKERS)"
-  $T pickle --pickle-mode "$PICKLE_MODE" > "$LOG/pickle_$PICKLE_MODE.log" 2>&1
-  tail -1 "$LOG/pickle_$PICKLE_MODE.log"
+  if [ "$SEED" -ne 1 ]; then   # shared pickle of seed 1, only the seed's config
+    [ -f "$W/data/training_pdv2_$PICKLE_MODE.pickle" ] || { echo "shared pickle missing"; exit 1; }
+    say "pickle: shared training_pdv2_$PICKLE_MODE.pickle; config only (num_workers $NUM_WORKERS)"
+  else
+    say "pickle ($PICKLE_MODE) + config (num_workers $NUM_WORKERS)"
+    $T pickle --pickle-mode "$PICKLE_MODE" > "$LOG/pickle_$PICKLE_MODE.log" 2>&1
+    tail -1 "$LOG/pickle_$PICKLE_MODE.log"
+  fi
   $T config --pickle-mode "$PICKLE_MODE" --num-workers "$NUM_WORKERS" > "$LOG/config.log" 2>&1
   tail -1 "$LOG/config.log"
 }
 
+stage_config() {   # rewrite only the seed's config (e.g. NUM_WORKERS=2 before train)
+  say "config ($PICKLE_MODE, num_workers $NUM_WORKERS)"
+  $T config --pickle-mode "$PICKLE_MODE" --num-workers "$NUM_WORKERS" > "$LOG/config.log" 2>&1
+  tail -1 "$LOG/config.log"
+}
+
+stage_paths() {    # resolved locations for this SEED (no side effects)
+  echo "SEED=$SEED LOG=$LOG SEL=$SEL"
+  echo "smoke=$W/smoke$SFX dryrun=$W/dryrun$SFX test_ledgers=results/pdv2_imlpr_official$SFX/odom"
+  python3 -c "import sys; sys.path.insert(0, 'scripts'); import _imlpr_official_train as T, _imlpr_official_dump as D; \
+r = lambda p: str(p.relative_to(T.REPO)); \
+print('py: SEED', T.SEED, D.SEED, '| RESULTS', r(T.RESULTS), r(D.RESULTS), '| SELECTION', r(T.SELECTION), \
+'| CONFIG', r(T.CONFIG), '| RUNS', r(T.RUNS), '| SMOKE', r(T.SMOKE), '| OUT', r(D.OUT), '| DESC', r(D.DESC), \
+'| shared: DATA', r(T.DATA), 'MODEL_CONFIG', r(T.MODEL_CONFIG))"
+}
+
 stage_smoke() {
   say smoke
-  rm -rf "$W/smoke"
+  rm -rf "$W/smoke$SFX"
   $T smoke --pickle-mode "$PICKLE_MODE" > "$LOG/smoke.log" 2>&1
   grep -E "collate|step|val |family|cuda" "$LOG/smoke.log" | tail -20
 }
@@ -141,14 +176,14 @@ stage_test() {
 print(' '.join(f'{s}/{q}' for s, q in TEST))")
   for key in $keys; do
     name=${key//\//_}
-    if [ -f "results/pdv2_imlpr_official/odom/dump_imlpr_${name}.npz" ]; then
+    if [ -f "results/pdv2_imlpr_official$SFX/odom/dump_imlpr_${name}.npz" ]; then
       continue
     fi
     say "test $key: riv"
     $R jobs --role test_odom --seq "$key" | gen_jobs
     say "test $key: dump"
     $D dump --seqs "$key" >> "$LOG/dump.log" 2>&1
-    if [ "${KEEP_TEST_RIV:-0}" != 1 ]; then
+    if [ "${KEEP_TEST_RIV:-$KEEP_DEFAULT}" != 1 ]; then
       find "$W/data/test_odom/$name" -name '[0-9]*.npy' -delete
     fi
   done

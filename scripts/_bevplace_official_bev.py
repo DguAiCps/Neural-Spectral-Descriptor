@@ -28,7 +28,7 @@ Subcommands (run inside ring_baseline):
   index --role R            poses txt + scan_ids + meta for every sequence
   jobs  [--chunk 2000]      print "role seq shard nshards" generation jobs
   gen --role R --seq S [--shard k --nshards n]   write the PNGs (resumable)
-  status                    count PNGs against the caches
+  status [--role R ...]     count PNGs against the caches (default: all roles)
   selftest [--n-scans 2]    CPU: adapter output == official script output
 """
 from __future__ import annotations
@@ -226,9 +226,11 @@ def cmd_gen(role: str, key: str, shard: int, nshards: int):
           f"{time.time() - t0:.0f} s, max |pose - cache| {max_dt:.2e} m", flush=True)
 
 
-def cmd_status() -> bool:
+def cmd_status(roles=None) -> bool:
     ok = True
     for role, (seqs, _, _, _) in ROLES.items():
+        if roles and role not in roles:
+            continue
         n_all = n_have = 0
         for sensor, seq in seqs:
             d = BEV / role / seq_name(sensor, seq)
@@ -341,7 +343,9 @@ def main():
     p.add_argument("--seq", required=True)
     p.add_argument("--shard", type=int, default=0)
     p.add_argument("--nshards", type=int, default=1)
-    sub.add_parser("status")
+    p = sub.add_parser("status")
+    p.add_argument("--role", choices=tuple(ROLES), nargs="+", default=None,
+                   help="only these roles (default: all)")
     p = sub.add_parser("selftest")
     p.add_argument("--n-scans", type=int, default=2)
     p.add_argument("--out-json", type=Path, default=None)
@@ -354,7 +358,7 @@ def main():
     elif a.cmd == "gen":
         cmd_gen(a.role, a.seq, a.shard, a.nshards)
     elif a.cmd == "status":
-        sys.exit(0 if cmd_status() else 1)
+        sys.exit(0 if cmd_status(a.role) else 1)
     elif a.cmd == "selftest":
         cmd_selftest(a.n_scans, a.out_json)
 

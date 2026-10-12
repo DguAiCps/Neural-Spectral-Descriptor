@@ -68,11 +68,17 @@ import _helios_official_prep as P  # noqa: E402
 HELIOS = P.HELIOS
 OFFICIAL_CONFIG = HELIOS / "config/config_baseline_helios.txt"
 MODEL_CONFIG = HELIOS / "config/model_helios.txt"
-CONFIG = P.WORK / "config_pdv2.txt"
-RUNS = P.WORK / "runs"
-RESULTS = REPO / "results/pdv2_helios_official"
+# training seed: environment variable SEED (default 1).  SEED = 1 keeps every
+# path of the first run; any other seed gets its own config / runs / smoke /
+# results (suffix _s<SEED>).  Prepared scans, pickles and overlap files
+# (_external/helios_official_pdv2/{data,overlap}) are shared by all seeds.
+SEED = int(os.environ.get("SEED", "1"))
+SFX = "" if SEED == 1 else f"_s{SEED}"
+CONFIG = P.WORK / f"config_pdv2{SFX}.txt"
+RUNS = P.WORK / f"runs{SFX}"
+SMOKE = P.WORK / f"smoke{SFX}"
+RESULTS = REPO / f"results/pdv2_helios_official{SFX}"
 RECORD = RESULTS / "train_record.json"
-SEED = 1
 
 
 PML112 = P.HENV / "pml112"   # pytorch-metric-learning 1.1.2 (official Dockerfile pin)
@@ -518,7 +524,7 @@ def main():
     ap.add_argument("--smoke", type=int, default=0,
                     help="first N queries of every folder, 1 epoch, separate run/record")
     ap.add_argument("--selftest", action="store_true")
-    ap.add_argument("--out-json", type=Path, default=P.LOG_DIR / "helios_selftest_train.json")
+    ap.add_argument("--out-json", type=Path, default=P.LOG_DIR / f"helios_selftest_train{SFX}.json")
     a = ap.parse_args()
     if a.selftest:
         selftest(a.out_json)
@@ -528,12 +534,12 @@ def main():
     from misc.utils import TrainingParams
     assert torch.cuda.is_available(), "training needs CUDA (sptr kernels)"
     if a.smoke:
-        sm = P.WORK / "smoke"
+        sm = SMOKE
         sm.mkdir(parents=True, exist_ok=True)
         for role, name in (("train", "training.pickle"), ("val", "validation.pickle")):
             subset_pickle(P.DATA / name, sm / name, a.smoke)
-        cfg = write_config(sm / "config_smoke.txt", P.DATA, train_file="../smoke/training.pickle",
-                           val_file="../smoke/validation.pickle", epochs=1)
+        cfg = write_config(sm / "config_smoke.txt", P.DATA, train_file=f"../{sm.name}/training.pickle",
+                           val_file=f"../{sm.name}/validation.pickle", epochs=1)
         params = TrainingParams(str(cfg), str(MODEL_CONFIG))
         params.print()
         run_training(params, sm / "run", sm / "train_record.json", resume=False, device="cuda")

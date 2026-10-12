@@ -23,6 +23,8 @@ data/preprocessed_v2_odom (scan_ids; poses_gt only for scoring):
 Subcommands (run inside ring_baseline):
   dump [--seqs S ...] [--checkpoint P]   one worker subprocess per sequence
   aggregate                              PR summary via _pdv2_c3 (unchanged)
+  (dump / aggregate take --results-dir, default results/pdv2_bevplace_official
+   = seed 1; other seeds: results/pdv2_bevplace_official_s{SEED})
   selftest                               CPU: L2 prefix ledger checks
   dry-run-cpu --seq S --n N --out-dir D  CPU-only format check, untrained net
 """
@@ -46,9 +48,21 @@ from _bevplace_official_bev import (  # noqa: E402
 from _pdv2_pilot import TEST  # noqa: E402
 from _pr_eval_lib import MIN_INDEX_GAP  # noqa: E402
 
-RESULTS = REPO / "results/pdv2_bevplace_official"
+DEFAULT_RESULTS = "results/pdv2_bevplace_official"   # seed 1
+RESULTS = REPO / DEFAULT_RESULTS
 OUT = RESULTS / "odom"
 SELECTION = RESULTS / "train_selection.json"
+
+
+def _set_results(path: str):
+    """Results root of one training seed (--results-dir; the run script passes
+    results/pdv2_bevplace_official_s{SEED} for SEED != 1).  It holds that
+    seed's train_selection.json (-> checkpoint), odom/ ledgers and summary."""
+    global RESULTS, OUT, SELECTION
+    RESULTS = Path(path) if Path(path).is_absolute() else REPO / path
+    RESULTS.relative_to(REPO)          # must stay inside the repository
+    OUT = RESULTS / "odom"
+    SELECTION = RESULTS / "train_selection.json"
 METHOD = "bevplace"
 
 
@@ -222,7 +236,8 @@ def cmd_dump(seqs, checkpoint, threads, batch, worker, overwrite):
             continue
         cmd = [sys.executable, str(Path(__file__).resolve()), "dump", "--worker",
                "--seqs", key, "--checkpoint", str(checkpoint),
-               "--threads", str(threads), "--batch", str(batch)]
+               "--threads", str(threads), "--batch", str(batch),
+               "--results-dir", str(RESULTS.relative_to(REPO))]
         rc = subprocess.run(cmd).returncode
         if rc:
             print(f"WORKER_FAILED {key} rc={rc}", flush=True)
@@ -332,13 +347,17 @@ def main():
     p.add_argument("--batch", type=int, default=128, help="official --cacheBatchSize")
     p.add_argument("--worker", action="store_true")
     p.add_argument("--overwrite", action="store_true")
-    sub.add_parser("aggregate")
+    p.add_argument("--results-dir", default=DEFAULT_RESULTS)
+    p = sub.add_parser("aggregate")
+    p.add_argument("--results-dir", default=DEFAULT_RESULTS)
     sub.add_parser("selftest")
     p = sub.add_parser("dry-run-cpu")
     p.add_argument("--seq", required=True)
     p.add_argument("--n", type=int, default=80)
     p.add_argument("--out-dir", required=True)
     a = ap.parse_args()
+    if a.cmd in ("dump", "aggregate"):
+        _set_results(a.results_dir)
     if a.cmd == "dump":
         cmd_dump(a.seqs, a.checkpoint, a.threads, a.batch, a.worker, a.overwrite)
     elif a.cmd == "aggregate":

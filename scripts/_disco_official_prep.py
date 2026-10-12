@@ -96,7 +96,25 @@ WORK = REPO / "_external/disco_official_pdv2"
 POLAR = WORK / "polar"
 V2 = REPO / "data/preprocessed_v2"
 ODOM = REPO / "data/preprocessed_v2_odom"
-RESULTS = REPO / "results/pdv2_disco_official"
+
+
+def _seed_from_env() -> int:
+    """Training seed from the environment variable SEED (default 1)."""
+    raw = os.environ.get("SEED") or "1"
+    assert raw.isdigit() and raw[0] != "0", f"SEED must be a positive integer, got {raw!r}"
+    return int(raw)
+
+
+SEED = _seed_from_env()
+
+
+def seeded(path: Path) -> Path:
+    """Training-dependent location: unchanged for seed 1, '<name>_s<SEED>'
+    otherwise.  Inputs (polar stores, index) are shared by all seeds."""
+    return path if SEED == 1 else path.with_name(f"{path.name}_s{SEED}")
+
+
+RESULTS = seeded(REPO / "results/pdv2_disco_official")
 ROLES = {   # role -> (sequence list, cache dir, cache-name middle, pose key)
     "train": (TRAIN, V2, "", "poses"),
     "val": (VAL, V2, "val_", "poses"),
@@ -480,9 +498,10 @@ def cmd_gen(role: str, key: str, flush_every: int = 500):
           f"{meta['n_empty']} empty, median hits {meta['hits_median']}", flush=True)
 
 
-def cmd_status() -> bool:
+def cmd_status(roles=tuple(ROLES)) -> bool:
     ok = True
-    for role, (seqs, _, _, _) in ROLES.items():
+    for role in roles:
+        seqs = ROLES[role][0]
         n_all = n_done = n_empty = 0
         for sensor, seq in seqs:
             d = store_dir(role, sensor, seq)
@@ -738,7 +757,8 @@ def main():
     p = sub.add_parser("gen")
     p.add_argument("--role", choices=tuple(ROLES), required=True)
     p.add_argument("--seq", required=True)
-    sub.add_parser("status")
+    p = sub.add_parser("status")
+    p.add_argument("--role", choices=tuple(ROLES), nargs="+", default=list(ROLES))
     p = sub.add_parser("selftest")
     p.add_argument("--n-scans", type=int, default=2)
     p.add_argument("--out-json", type=Path, default=None)
@@ -754,7 +774,7 @@ def main():
     elif a.cmd == "gen":
         cmd_gen(a.role, a.seq)
     elif a.cmd == "status":
-        sys.exit(0 if cmd_status() else 1)
+        sys.exit(0 if cmd_status(a.role) else 1)
     elif a.cmd == "selftest":
         cmd_selftest(a.n_scans, a.out_json)
     elif a.cmd == "gpu-check":
