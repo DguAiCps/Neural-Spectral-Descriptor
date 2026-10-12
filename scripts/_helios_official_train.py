@@ -32,7 +32,11 @@ The epoch loop of trainer.do_train (trainer.py:287-353) is repeated in
   3. resume.pth after every epoch (model, optimizer, scheduler, maximum_ap,
      stats, RNG states) and --resume; the official loop has no resume;
   4. seed 1 for random / numpy / torch (the official code sets none);
-  5. a per-epoch JSON record (stats, times, GPU peak memory).
+  5. a per-epoch JSON record (stats, times, GPU peak memory);
+  6. guard_empty_miner_stats: a batch whose hard-triplet miner has no valid
+     anchor would crash the official statistics line (also on torch 1.13 /
+     pml 1.1.2); its six logged distance statistics become NaN, the loss (0 for
+     zero triplets) and mining are the official ones.  Counted per epoch.
 Saved like the official loop: <run>/HeLiOS_default_trainning_best.pth whenever
 the validation-phase AP (TruncatedSmoothAP statistic on validation.pickle =
 Roundabout01) beats every earlier epoch, _{10,20,...}.pth (save_freq default
@@ -97,6 +101,34 @@ def official_path():
         sys.modules["pytorch_metric_learning"].__version__ == "1.1.2", "pml imported before official_path()"
 
 
+def guard_empty_miner_stats():
+    """Run-only guard (category 2; the official stack fails the same way:
+    torch 1.13.1 + pml 1.1.2 raise the identical RuntimeError).
+    HardTripletMinerWithMasks._update_stats (models/losses/loss.py:191-203)
+    takes torch.max / min / mean over the valid anchors; when no row of a batch
+    has both kinds of partner (e.g. no semi-positive in a small batch) the set
+    is empty and torch.max raises.  Mining and the loss are NOT changed: with
+    zero triplets the official loss returns 0 (zero_losses).  For such a call
+    only the six logged distance statistics become NaN; every other call runs
+    the official method.  Calls are counted in EMPTY_MINER_CALLS."""
+    import models.losses.loss as L
+    orig = L.HardTripletMinerWithMasks._update_stats
+    if getattr(orig, "_pdv2_guard", False):
+        return
+    def _update_stats(self, pos_dist, neg_dist, valid_idx):  # noqa: E306
+        if pos_dist[valid_idx].numel() == 0:
+            EMPTY_MINER_CALLS[0] += 1
+            self.stats.update({k: float("nan") for k in self.stats})
+            return
+        return orig(self, pos_dist, neg_dist, valid_idx)
+    _update_stats._pdv2_guard = True
+    _update_stats._pdv2_orig = orig
+    L.HardTripletMinerWithMasks._update_stats = _update_stats
+
+
+EMPTY_MINER_CALLS = [0]
+
+
 def write_config(path: Path, dataset_folder: Path, **train_overrides) -> Path:
     """Official config_baseline_helios.txt with dataset_folder replaced
     (and, for smoke / selftest only, the given [TRAIN] keys)."""
@@ -145,6 +177,7 @@ def run_training(params, run_dir: Path, record_path: Path, resume: bool,
     from datasets.dataset_utils import make_dataloaders
     from models.losses.loss import make_losses
     import training.trainer as T
+    guard_empty_miner_stats()                              # CHANGED 6 (run-only)
 
     random.seed(SEED)                                      # CHANGED 4
     np.random.seed(SEED)
@@ -198,6 +231,7 @@ def run_training(params, run_dir: Path, record_path: Path, resume: bool,
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
         times, is_best = {}, False
+        empty0 = EMPTY_MINER_CALLS[0]
         for phase in phases:
             t0 = time.time()
             running_stats = []
@@ -237,6 +271,7 @@ def run_training(params, run_dir: Path, record_path: Path, resume: bool,
             **{f"{ph}_{k}": float(g[ph][k]) for ph in phases
                for k in ("loss_truncated", "loss_triplet_ps", "loss_triplet_sn", "ap")},
             "saved_best": is_best,
+            "empty_miner_calls": EMPTY_MINER_CALLS[0] - empty0,
             "maximum_ap": float(maximum_ap), **times,
             "cuda_peak_gb": round(torch.cuda.max_memory_allocated() / 2 ** 30, 2)
             if torch.cuda.is_available() else None})
@@ -363,6 +398,82 @@ except Exception as e:
     return res
 
 
+def _guard_check() -> dict:
+    """guard_empty_miner_stats vs the official method (pml 1.1.2, CPU):
+    non-empty batches -> identical loss, gradient and statistics; a batch with
+    no valid anchor -> the official method raises, the guarded call returns
+    the official loss_fn value for zero triplets (0) with NaN statistics."""
+    import torch
+    import torch.nn.functional as F
+    import models.losses.loss as L
+    cur = L.HardTripletMinerWithMasks._update_stats
+    L.HardTripletMinerWithMasks._update_stats = getattr(cur, "_pdv2_orig", cur)   # official
+
+    def make(n, p_pos, p_semi, seed):
+        g = torch.Generator().manual_seed(seed)
+        emb = F.normalize(torch.randn(n, 32, generator=g), dim=1).double()
+        r = torch.rand(n, n, generator=g)
+        r = (r + r.T) / 2
+        pos = r < p_pos
+        semi = (r >= p_pos) & (r < p_pos + p_semi)
+        pos.fill_diagonal_(False)
+        semi.fill_diagonal_(False)                 # diagonal negative, as in the official collate
+        neg = ~pos & ~semi
+        ov = torch.where(pos, 0.5 + 0.5 * r, torch.where(semi, 0.5 * r, torch.zeros_like(r))).double()
+        return emb, pos, semi, neg, ov
+
+    def run(emb, pos, semi, neg, ov):
+        out = {}
+        for rel, margin, (pm, nm) in (("ps", 0.02, (pos, semi)), ("sn", 2 * 0.19, (semi, neg))):
+            e = emb.clone().requires_grad_(True)
+            fn = L.BatchHardGuidedTripletLossWithMasks(margin=margin)
+            # as in training: the loss object has already reduced a non-empty batch
+            # (pml 1.1.2 registers reducer.triplets_past_filter on that first call)
+            we, wp, wsm, wn, wo = make(32, 0.2, 0.3, 99)
+            fn(we, *((wp, wsm) if rel == "ps" else (wsm, wn)), wo, rel)
+            try:
+                loss, st = fn(e, pm, nm, ov, rel)
+            except RuntimeError as ex:
+                out[rel] = f"RuntimeError: {str(ex).splitlines()[0]}"
+                continue
+            loss.backward()
+            ref = None
+            if st["num_triplets"] == 0:      # what the official loss_fn gives for zero triplets
+                e2 = emb.clone().requires_grad_(True)
+                ref = float(fn.loss_fn(e2, torch.arange(len(e2)), (torch.zeros(0, dtype=torch.long),) * 3,
+                                       ov, rel))
+            out[rel] = (float(loss), e.grad.clone(), st, ref)
+        return out
+
+    cases = [(n, pp, ps_, sd) for sd, (n, pp, ps_) in enumerate(
+        [(16, 0.1, 0.1), (32, 0.05, 0.3), (64, 0.2, 0.05), (48, 0.02, 0.02), (24, 0.3, 0.3), (40, 0.1, 0.0)])]
+    official = {c: run(*make(*c)) for c in cases}
+    guard_empty_miner_stats()
+    rec = {}
+    n_equal = n_nonempty = n_empty_ok = n_empty = 0
+    for c in cases:
+        g = run(*make(*c))
+        for rel in ("ps", "sn"):
+            o, gr = official[c][rel], g[rel]
+            if isinstance(o, str):                 # official raised: empty valid set
+                n_empty += 1
+                ok = (not isinstance(gr, str)) and gr[3] is not None and gr[0] == gr[3] == 0.0 \
+                    and all(v != v for k, v in gr[2].items() if k.endswith("pair_dist")) \
+                    and float(gr[1].abs().max()) == 0.0
+                n_empty_ok += ok
+                rec[f"{c} {rel}"] = {"official": o, "guarded_loss": gr[0],
+                                     "official_loss_fn_zero_triplets": gr[3], "stats_nan_grad_zero": bool(ok)}
+            else:
+                n_nonempty += 1
+                same = o[0] == gr[0] and torch.equal(o[1], gr[1]) and o[2] == gr[2]
+                n_equal += same
+                rec[f"{c} {rel}"] = {"identical_loss_grad_stats": bool(same), "loss": gr[0],
+                                     "n_triplets": gr[2]["num_triplets"]}
+    rec["empty_ok"] = f"{n_empty_ok}/{n_empty}"
+    rec["non_empty_identical"] = f"{n_equal}/{n_nonempty}"
+    return rec
+
+
 def selftest(out_json: Path):
     """CPU only: (1) official training entry imports with the patched
     MinkowskiEngine and the official model is built (author weights load
@@ -388,6 +499,8 @@ def selftest(out_json: Path):
     m = model_factory(mp)
     sd = torch.load(HELIOS / "weights/HeLiOS.pth", map_location="cpu", weights_only=True)
     m.load_state_dict(sd, strict=True)
+    rep["empty_miner_guard"] = _guard_check()
+    print(json.dumps(rep["empty_miner_guard"]), flush=True)
     rep["imports"] = {"seconds": round(time.time() - t0, 1), "MinkowskiEngine": ME.__version__,
                       "torch": torch.__version__, "model_params": int(sum(p.numel() for p in m.parameters())),
                       "author_weights_strict_load": True}
@@ -474,7 +587,11 @@ def selftest(out_json: Path):
         # (5) collate cost of one official 2048 batch on a synthetic pickle
         rep["collate_2048"] = _collate_timing(td, q, data)
         print(json.dumps(rep["collate_2048"]), flush=True)
-    ok = (rep["pml_loss_check"]["official_pin"]["ok"] and rep["pml_loss_check"]["official_pin"]["pml"] == "1.1.2"
+    eg = rep["empty_miner_guard"]
+    a_, b_ = eg["empty_ok"].split("/")
+    c_, d_ = eg["non_empty_identical"].split("/")
+    ok = (a_ == b_ and int(b_) > 0 and c_ == d_ and int(d_) > 0
+          and rep["pml_loss_check"]["official_pin"]["ok"] and rep["pml_loss_check"]["official_pin"]["pml"] == "1.1.2"
           and rep["collate"]["pos_semi_neg_disjoint"]
           and rep["cpu_loop"]["epochs_after_resume"] == [1, 2, 3, 4] and rep["cpu_loop"]["losses_finite"])
     rep["all_ok"] = bool(ok)
@@ -516,6 +633,57 @@ def _collate_timing(td: Path, q_small: dict, data: Path) -> dict:
             "n_minibatches": len(batch[0])}
 
 
+def check_batches(n_epochs: int, out_json: Path):
+    """CPU only: replay the official BatchSamplers on data/{training,validation}.pickle
+    with the run's seeding (random.seed(SEED) before make_dataloaders; nothing
+    else in the main process draws from `random`), build the official
+    collate masks per batch (in_sorted_array semantics, diagonal negative) and
+    count the rows the two hard-triplet miners can use: ps = has a positive
+    and a semi-positive, sn = has a semi-positive and a negative."""
+    import torch
+    official_path()
+    from misc.utils import TrainingParams
+    from datasets.dataset_utils import make_dataloaders
+    with tempfile.TemporaryDirectory(dir=str(P.WORK)) as td:
+        params = TrainingParams(str(write_config(Path(td) / "cfg.txt", P.DATA)), str(MODEL_CONFIG))
+    random.seed(SEED)
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
+    dls = make_dataloaders(params)
+    rep = {"seed": SEED, "epochs": n_epochs, "train_n": len(dls["train"].dataset),
+           "val_n": len(dls["val"].dataset), "per_epoch": [], "empty": []}
+    for epoch in range(1, n_epochs + 1):
+        row = {"epoch": epoch}
+        for phase in ("train", "val"):
+            ds, sampler = dls[phase].dataset, dls[phase].batch_sampler
+            sizes, min_ps, min_sn = [], [], []
+            for b, batch in enumerate(sampler):                     # official generate_batches
+                lab = np.asarray(batch)
+                pos = np.stack([np.isin(lab, ds.queries[l].positives) for l in lab])
+                semi = np.stack([np.isin(lab, ds.queries[l].non_negatives) for l in lab])
+                neg = ~pos & ~semi
+                v_ps = int((pos.any(1) & semi.any(1)).sum())
+                v_sn = int((semi.any(1) & neg.any(1)).sum())
+                sizes.append(len(lab))
+                min_ps.append(v_ps)
+                min_sn.append(v_sn)
+                if v_ps == 0 or v_sn == 0:
+                    rep["empty"].append({"epoch": epoch, "phase": phase, "batch": b, "size": len(lab),
+                                         "valid_ps_rows": v_ps, "valid_sn_rows": v_sn,
+                                         "batches_in_phase": None})
+            for e in rep["empty"]:
+                if e["epoch"] == epoch and e["phase"] == phase:
+                    e["batches_in_phase"] = len(sizes)
+            row[phase] = {"batches": len(sizes), "sizes_min_last": [min(sizes), sizes[-1]],
+                          "valid_ps_rows_min": min(min_ps), "valid_sn_rows_min": min(min_sn)}
+        rep["per_epoch"].append(row)
+        print(json.dumps(row), flush=True)
+    rep["n_empty_batches"] = len(rep["empty"])
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    out_json.write_text(json.dumps(rep, indent=1))
+    print(json.dumps({"empty": rep["empty"][:20], "n_empty_batches": rep["n_empty_batches"]}), flush=True)
+
+
 # ------------------------------------------------------------ main
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
@@ -524,10 +692,15 @@ def main():
     ap.add_argument("--smoke", type=int, default=0,
                     help="first N queries of every folder, 1 epoch, separate run/record")
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--check-batches", type=int, default=0, metavar="EPOCHS",
+                    help="CPU: replay the official samplers for EPOCHS epochs and count miner-empty batches")
     ap.add_argument("--out-json", type=Path, default=P.LOG_DIR / f"helios_selftest_train{SFX}.json")
     a = ap.parse_args()
     if a.selftest:
         selftest(a.out_json)
+        return
+    if a.check_batches:
+        check_batches(a.check_batches, P.LOG_DIR / f"helios_batch_check{SFX}.json")
         return
     official_path()
     import torch
