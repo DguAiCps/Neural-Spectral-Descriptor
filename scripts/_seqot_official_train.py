@@ -88,7 +88,7 @@ sys.path[:0] = [str(REPO), str(REPO / "src"), str(REPO / "scripts")]
 sys.dont_write_bytecode = True
 
 from _seqot_official_prep import (  # noqa: E402
-    FOV, GEM_SEQLEN, OFFICIAL, OFFICIAL_COMMIT, RESULTS, SEED, SEQL, TRAIN, VAL,
+    C_BACK, C_FWD, FOV, GEM_SEQLEN, OFFICIAL, OFFICIAL_COMMIT, RESULTS, SEED, SEQL, TRAIN, VAL,
     WORK, _git, _write_json, label_dir, official_config, official_imports, open_store,
     range_image, seq_name, sha256)
 
@@ -101,9 +101,34 @@ TRAIN_SEED = int(os.environ.get("SEED") or 1)
 # everything training-dependent (range images, frames, labels, config shared).
 SEED_WORK = WORK if TRAIN_SEED == 1 else WORK / f"s{TRAIN_SEED}"
 SEED_RESULTS = RESULTS if TRAIN_SEED == 1 else RESULTS.with_name(f"{RESULTS.name}_s{TRAIN_SEED}")
-RUNS = SEED_WORK / "runs"
-SUBDESC = SEED_WORK / "subdesc"
-SELECTION = SEED_RESULTS / "train_selection.json"
+# Evaluation windows (VAL selection and test ledgers), env SEQOT_EVAL_WINDOW:
+#   centered (default, main table, user decision 2026-10-14): the official
+#            windows -- sub-descriptor raw [x-1, x+1], GeM [s-10, s+9] over an
+#            (N + 1)-row sub-descriptor array, official fallbacks; reads raw
+#            scans up to s + 10, all observed before the main protocol's
+#            decision at keyframe q + 15;
+#   trailing (auxiliary): raw [x-2, x] and [s-19, s] (past only).
+# Training is the same (official centred) in both modes; phase-1 runs, labels,
+# frames, config and range images are shared.  Mode-specific: selection
+# record, results, VAL sub-descriptor cache, test descriptors, and phase 2
+# unless both modes chose the same phase-1 checkpoint (stage2_home).
+EVAL_WINDOW = os.environ.get("SEQOT_EVAL_WINDOW") or "centered"
+assert EVAL_WINDOW in ("centered", "trailing"), EVAL_WINDOW
+
+
+def mode_dirs(mode):
+    """(work dir, results dir) of an evaluation-window mode for this seed;
+    trailing = the original locations."""
+    if mode == "trailing":
+        return SEED_WORK, SEED_RESULTS
+    return (SEED_WORK / "centered",
+            RESULTS.with_name(f"{RESULTS.name}_centered" + ("" if TRAIN_SEED == 1 else f"_s{TRAIN_SEED}")))
+
+
+MODE_WORK, MODE_RESULTS = mode_dirs(EVAL_WINDOW)
+RUNS = SEED_WORK / "runs"                 # runs/stage1 (both modes), runs/smoke
+SUBDESC = MODE_WORK / "subdesc"           # subdesc/val cache; subdesc/train -> stage2_home()
+SELECTION = MODE_RESULTS / "train_selection.json"
 OVERLAP_THRESH = 0.3        # training_seqot.py:51, training_gem.py:54; paper III-C
 MARGIN_1 = 0.5              # training_seqot.py:152, training_gem.py:155; paper alpha
 STEP_SIZE, GAMMA = 5, 0.9   # StepLR, training_seqot.py:47, training_gem.py:45; paper "0.9 every 5"
@@ -156,13 +181,17 @@ def device():
 # ------------------------------------------------------------ data sources
 class StoreSource:
     """Raw scans of one sequence -> (32, 900) range images, via the range
-    store of _seqot_official_prep (rows == raw indices for role train)."""
+    store of _seqot_official_prep (rows == raw indices for role train).
+    ext=True also reads the centred extension part (val / test)."""
 
-    def __init__(self, role, sensor, seq):
-        self.mm, self.raw_ids, self.kf, self.kf_poses, self.n_raw = open_store(role, sensor, seq)
+    def __init__(self, role, sensor, seq, ext=False):
+        st = open_store(role, sensor, seq, ext=ext)
+        self.mm, self.raw_ids, self.kf, self.kf_poses, self.n_raw = st[:5]
+        self.mm_ext, self.ext_ids = st[5:] if ext else (None, np.zeros(0, np.int64))
         self.contiguous = bool(len(self.raw_ids) == self.n_raw)
         if not self.contiguous:
             self.pos = {int(r): k for k, r in enumerate(self.raw_ids)}
+            self.pos_ext = {int(r): k for k, r in enumerate(self.ext_ids)}
 
     def exists(self, r):            # official: os.path.exists(<root>/<r:06d>.npy)
         return 0 <= r < self.n_raw
@@ -171,7 +200,10 @@ class StoreSource:
         raws = np.asarray(raws, dtype=np.int64)
         if self.contiguous:
             return self.mm[raws]
-        return self.mm[np.array([self.pos[int(r)] for r in raws])]
+        if not len(self.ext_ids):
+            return self.mm[np.array([self.pos[int(r)] for r in raws])]
+        return np.stack([self.mm[self.pos[int(r)]] if int(r) in self.pos
+                         else self.mm_ext[self.pos_ext[int(r)]] for r in raws])
 
 
 class DictSource:
@@ -471,6 +503,41 @@ def gem_final(gem, sub_lookup, keys, ok, dev, mode, seq_len=GEM_SEQLEN, batch=40
     return out
 
 
+def centered_need(src, kf):
+    """Raw scans whose sub-descriptors the official centred GeM windows of
+    the keyframes read ([s-10, s+9] inside [0, n_raw))."""
+    need = np.unique(np.concatenate([centered(int(s), GEM_SEQLEN) for s in kf]))
+    return need[(need >= 0) & (need < src.n_raw)]
+
+
+def centered_gem(gem, sub, need, n_raw, kf, dev):
+    """Official test_gem_prepare.py:46-56 window logic on the sub-descriptor
+    array of gen_sub_descriptors.py:51 (N + 1 rows, row N = 0): window
+    [s-10, s+9]; complete iff every index is in [0, N]
+    (read_samples.py:100), otherwise the key's own descriptor 20 times."""
+    pos = np.full(n_raw + 1, -1, dtype=np.int64)
+    pos[need] = np.arange(len(need))
+    pos[n_raw] = len(need)
+    subz = np.vstack([sub, np.zeros((1, sub.shape[1]), np.float32)])
+    return gem_final(gem, lambda w: subz[pos[w]], kf, lambda r: 0 <= r < n_raw + 1, dev, "centered")
+
+
+def centered_final_descriptors(fe, gem, src, kf, dev, batch=64):
+    """Main-table descriptors at the keyframes `kf` (raw scan ids): the
+    official centred pipeline (gen_sub_descriptors sub-descriptors, centred
+    20-window GeM).  Reads raw scans up to s + 10."""
+    need = centered_need(src, kf)
+    sub = sub_descriptors(fe, src, need, dev, batch, "centered")
+    return centered_gem(gem, sub, need, src.n_raw, kf, dev), sub, need
+
+
+def final_descriptors(fe, gem, src, kf, dev, batch=64, mode=None):
+    mode = mode or EVAL_WINDOW
+    if mode == "trailing":
+        return trailing_final_descriptors(fe, gem, src, kf, dev, batch)
+    return centered_final_descriptors(fe, gem, src, kf, dev, batch)
+
+
 def trailing_final_descriptors(fe, gem, src, kf, dev, batch=64):
     """Protocol (past-only) descriptors at the keyframes `kf` (raw scan ids):
     sub-descriptors of raw scans [s-19, s] with trailing 3-windows, then GeM
@@ -523,14 +590,17 @@ def val_score(fe, gem, dev, val_sets, batch=64, sub_cache=None):
     per = {}
     for (sensor, seq), src in val_sets:
         t0 = time.time()
-        if sub_cache is not None:
+        if sub_cache is not None and EVAL_WINDOW == "centered":
+            sub, need = sub_cache[(sensor, seq)]
+            final = centered_gem(gem, sub, need, src.n_raw, src.kf, dev)
+        elif sub_cache is not None:
             sub, need = sub_cache[(sensor, seq)]
             pos = np.full(src.n_raw, -1, dtype=np.int64)
             pos[need] = np.arange(len(need))
             final = gem_final(gem, lambda w: sub[pos[w]], src.kf, lambda r: 0 <= r < src.n_raw,
                               dev, "trailing")
         else:
-            final, _, _ = trailing_final_descriptors(fe, gem, src, src.kf, dev, batch)
+            final, _, _ = final_descriptors(fe, gem, src, src.kf, dev, batch)
         r_cos, nq = recall_at_1(final, src.kf_poses, "cos")
         r_l2, _ = recall_at_1(final, src.kf_poses, "l2")
         per[f"{sensor}/{seq}"] = {"r1_cos": r_cos, "r1_l2": r_l2, "n_queries": nq,
@@ -543,11 +613,16 @@ def val_score(fe, gem, dev, val_sets, batch=64, sub_cache=None):
 def _load_sel():
     if SELECTION.exists():
         return json.loads(SELECTION.read_text())
-    return {"_meta": {"official_commit": OFFICIAL_COMMIT, "metric": METRIC,
-                      "rule": "split-v2 VAL GT keyframes, R@1 5 m, |j-q| > 30 exhaustive, "
-                              "families equal / queries pooled (_pdv2_c3._family_pooled); "
-                              "best epoch, ties -> earlier epoch; trailing raw-scan windows"},
-            "stage1": {"epochs": {}}, "stage2": {"epochs": {}}}
+    meta = {"official_commit": OFFICIAL_COMMIT, "metric": METRIC,
+            "rule": "split-v2 VAL GT keyframes, R@1 5 m, |j-q| > 30 exhaustive, "
+                    "families equal / queries pooled (_pdv2_c3._family_pooled); "
+                    "best epoch, ties -> earlier epoch; trailing raw-scan windows"}
+    if EVAL_WINDOW == "centered":
+        meta["rule"] = meta["rule"].replace(
+            "trailing raw-scan windows", "official centred raw-scan windows (sub [x-1, x+1], "
+            "GeM [s-10, s+9], N + 1 rows)")
+        meta["eval_window"] = "centered"
+    return {"_meta": meta, "stage1": {"epochs": {}}, "stage2": {"epochs": {}}}
 
 
 def _choose(stage, metric):
@@ -560,7 +635,7 @@ def _choose(stage, metric):
 def _val_sets(limit=0):
     out = []
     for s, q in VAL:
-        src = StoreSource("val", s, q)
+        src = StoreSource("val", s, q, ext=(EVAL_WINDOW == "centered"))
         if limit:
             src.kf, src.kf_poses = src.kf[:limit], src.kf_poses[:limit]
         out.append(((s, q), src))
@@ -634,13 +709,56 @@ def _chosen(stage):
     return p, c
 
 
+def stage2_home():
+    """(work dir holding runs/stage2 and subdesc/train, reason).  Phase 2
+    depends only on the chosen phase-1 checkpoint (its inputs are the
+    official centred gen_sub_descriptors in both modes), so this mode reuses
+    the other mode's phase 2 iff (a) it has not started its own, (b) both
+    selections chose the same phase-1 checkpoint (sha256) and (c) the other
+    phase 2 and its train sub-descriptors are complete.  Otherwise phase 2 is
+    (re)trained here."""
+    own = MODE_WORK
+    if (own / "runs" / "stage2").exists():
+        return own, "own"
+    other = "trailing" if EVAL_WINDOW == "centered" else "centered"
+    o_work, o_res = mode_dirs(other)
+    try:
+        oc = json.loads((o_res / "train_selection.json").read_text())["stage1"]["chosen"]
+    except (FileNotFoundError, KeyError, TypeError):
+        return own, f"own ({other} has no phase-1 choice)"
+    _, my = _chosen("stage1")
+    if oc["sha256"] != my["sha256"]:
+        return own, f"own (phase-1 epoch {my['epoch']} here, {oc['epoch']} in {other})"
+    done = (o_work / "runs" / "stage2" / "finished").exists() and all(
+        (o_work / "subdesc" / "train" / f"{seq_name(s, q)}.npy").exists() for s, q in TRAIN)
+    if not done:
+        return own, f"own ({other} phase 2 not finished)"
+    return o_work, f"shared with {other} (same phase-1 checkpoint, epoch {my['epoch']})"
+
+
+def _record_stage2_home(home, why):
+    if EVAL_WINDOW == "trailing" and home == MODE_WORK:
+        return                          # trailing outputs keep their original content
+    sel = _load_sel()
+    rec = {"home": str(home.relative_to(REPO)), "reason": why}
+    if sel.get("stage2_source") != rec:
+        sel["stage2_source"] = rec
+        _write_json(SELECTION, sel)
+    print(f"phase 2 home: {rec['home']} -- {why}", flush=True)
+
+
 def cmd_subdesc(batch):
     """train/gen_sub_descriptors.py:40-58 per TRAIN sequence with the chosen
     phase-1 weights: centered windows, N + 1 rows (last row zero)."""
     dev = device()
     p, c = _chosen("stage1")
+    home, why = stage2_home()
+    _record_stage2_home(home, why)
+    out_dir = home / "subdesc" / "train"
+    if home != MODE_WORK:               # shared: the other mode's files, never rewritten
+        print("SKIP subdesc: shared phase 2", flush=True)
+        return
     fe = _load_fe(p, dev)
-    out_dir = SUBDESC / "train"
     out_dir.mkdir(parents=True, exist_ok=True)
     for s, q in TRAIN:
         out = out_dir / f"{seq_name(s, q)}.npy"
@@ -680,13 +798,18 @@ def cmd_train2(epochs, lr):
     lr = lr if lr is not None else LR2
     assert int(cfg["training_gem"]["seqlen"]) == GEM_SEQLEN
     _chosen("stage1")
+    home, why = stage2_home()
+    _record_stage2_home(home, why)
+    if home != MODE_WORK:               # shared, finished (checked by stage2_home)
+        print("SKIP train2: shared phase 2", flush=True)
+        return
     seed_all()
     dev = device()
-    sources = [DescSource(np.load(SUBDESC / "train" / f"{seq_name(s, q)}.npy")) for s, q in TRAIN]
+    sources = [DescSource(np.load(home / "subdesc" / "train" / f"{seq_name(s, q)}.npy")) for s, q in TRAIN]
     plan = anchor_plan(load_train_indices(),
                        lambda d, a: all(sources[d].exists(int(x)) for x in window(a, GEM_SEQLEN, TRAIN_WINDOW)),
                        *USE2)
-    run_dir = RUNS / "stage2"
+    run_dir = home / "runs" / "stage2"
     run_dir.mkdir(parents=True, exist_ok=True)
     _write_json(run_dir / "meta.json", {"lr": lr, "epochs": f"1..{epochs - 1}",
                                         "anchors_per_epoch": len(plan),
@@ -702,21 +825,27 @@ def cmd_select2(batch):
     dev = device()
     p1, _ = _chosen("stage1")
     fe = _load_fe(p1, dev)
-    run_dir = RUNS / "stage2"
+    home, why = stage2_home()
+    _record_stage2_home(home, why)
+    run_dir = home / "runs" / "stage2"
     assert (run_dir / "finished").exists(), "phase 2 not finished"
     val_sets = _val_sets()
     cache_dir = SUBDESC / "val"
     cache_dir.mkdir(parents=True, exist_ok=True)
     sub_cache = {}
-    for (s, q), src in val_sets:       # phase-1 sub-descriptors once (trailing windows)
+    for (s, q), src in val_sets:       # phase-1 sub-descriptors once (EVAL_WINDOW windows)
         f = cache_dir / f"{seq_name(s, q)}.npz"
         if f.exists() and str(np.load(f)["stage1_sha256"]) == sha256(p1):
             z = np.load(f)
             sub_cache[(s, q)] = (z["sub"], z["raw"])
             continue
-        need = np.unique(np.concatenate([trailing(int(k), GEM_SEQLEN) for k in src.kf]))
-        need = need[(need >= 0) & (need < src.n_raw)]
-        sub = sub_descriptors(fe, src, need, dev, batch, "trailing")
+        if EVAL_WINDOW == "centered":
+            need = centered_need(src, src.kf)
+            sub = sub_descriptors(fe, src, need, dev, batch, "centered")
+        else:
+            need = np.unique(np.concatenate([trailing(int(k), GEM_SEQLEN) for k in src.kf]))
+            need = need[(need >= 0) & (need < src.n_raw)]
+            sub = sub_descriptors(fe, src, need, dev, batch, "trailing")
         np.savez(f, sub=sub, raw=need, stage1_sha256=sha256(p1))
         sub_cache[(s, q)] = (sub, need)
     for p in sorted(run_dir.glob("amodel_gem*.pth.tar"),
@@ -1076,6 +1205,77 @@ def selftest_descriptors(rep, td):
         case["trailing_prefix_invariant_max_abs"] < 1e-5
 
 
+def selftest_centered(rep, td):
+    """Main-table (centred) evaluation descriptors:
+    (1) official gen_sub_descriptors.testHandler.eval() (unmodified, batch 1,
+        N + 1 rows) + the official centred GeM read
+        (read_one_need_descriptor_from_seq_ft) on its output == our
+        centered_final_descriptors, at keyframes covering both sequence ends
+        (start fallback, the zero row N inside a complete window, end fallback);
+    (2) causality for the main protocol (decision at keyframe q + 15,
+        candidates j <= q - 30): descriptors of keyframes <= q computed from a
+        stream cut after raw scan s_q + 10 equal the full-stream ones."""
+    import torch
+    from _pd_build_test_caches import _make_loader
+    mods = _official_train_modules()
+    L = _make_loader("kitti", "06")
+    n = 40
+    imgs = {r: range_image("kitti", L[r]["points"]) for r in range(n)}
+    root = td / "c_root"
+    root.mkdir()
+    for r, im in imgs.items():
+        np.save(root / f"{r:06d}.npy", im)
+    torch.manual_seed(SEED)
+    fe = official()["featureExtracter"](seqL=SEQL)
+    torch.save({"epoch": 1, "state_dict": fe.state_dict()}, td / "c_fe.pth.tar")
+    gem = official()["GeM"]()
+    with torch.no_grad():
+        gem.p.fill_(3.3)
+    torch.save({"epoch": 1, "state_dict": gem.state_dict()}, td / "c_gem.pth.tar")
+    work = td / "c_off"
+    work.mkdir()
+    cwd = os.getcwd()
+    os.chdir(work)
+    try:
+        with cpu_cuda_shim(), contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            mods["gen_sub_descriptors"].testHandler(
+                seqlen=SEQL, pretrained_weights=str(td / "c_fe.pth.tar"),
+                range_image_database_root=str(root) + "/",
+                range_image_query_root=str(root) + "/").eval()
+    finally:
+        os.chdir(cwd)
+    des = np.load(work / "des_list_database.npy")          # (n + 1, 256), row n = 0
+    cpu = torch.device("cpu")
+    gem_l, fe_l = _load_gem(td / "c_gem.pth.tar", cpu), _load_fe(td / "c_fe.pth.tar", cpu)
+    kf = np.array([0, 3, 12, 20, 29, 30, 31, 33, 39])
+    rs = mods["training_gem"].__dict__["read_one_need_descriptor_from_seq_ft"]
+    off = []
+    with cpu_cuda_shim(), torch.no_grad():
+        for k in kf:
+            x, _ = rs(str(k).zfill(6), des, GEM_SEQLEN)
+            off.append(gem_l(x).squeeze(1)[0].numpy())
+    off = np.stack(off)
+    src = DictSource(imgs)
+    src.n_raw = n
+    ours, sub, need = centered_final_descriptors(fe_l, gem_l, src, kf, cpu, batch=1)
+    case = {"keyframes": kf.tolist(), "official_des_rows": int(len(des)),
+            "sub_equal_official": bool(np.array_equal(sub, des[need])),
+            "final_bitwise_equal_official": bool(np.array_equal(ours, off)),
+            "final_max_abs_diff": float(np.abs(ours - off).max())}
+    # (2) cut the stream after raw s_q + 10 (q = keyframe 20)
+    s_q = 20
+    cut = DictSource({r: imgs[r] for r in range(s_q + 10 + 1)})
+    cut.n_raw = s_q + 10 + 1
+    kq = kf[kf <= s_q]
+    f_cut, _, _ = centered_final_descriptors(fe_l, gem_l, cut, kq, cpu, batch=1)
+    case["prefix_cut_equal"] = bool(np.array_equal(f_cut, ours[:len(kq)]))
+    case["max_raw_read_minus_s"] = int(max(int(r) for r in need[need <= s_q + 10]) - s_q) if len(need) else 0
+    rep["centered"] = case
+    print("centered", json.dumps(case), flush=True)
+    return case["sub_equal_official"] and case["final_bitwise_equal_official"] and case["prefix_cut_equal"]
+
+
 def selftest_resume(rep, td):
     """Our resume: 2 epochs straight == 1 epoch + resume (tiny GeM run)."""
     import torch
@@ -1139,6 +1339,8 @@ def cmd_selftest(parts, out_json):
             ok &= selftest_resume(rep, td)
         if "descriptors" in parts:
             ok &= selftest_descriptors(rep, td)
+        if "centered" in parts:
+            ok &= selftest_centered(rep, td)
     st = _git("status", "--porcelain", check=False)
     rep["official_clone_status"] = st.splitlines()
     rep["all_ok"] = bool(ok)
@@ -1173,7 +1375,8 @@ def main():
     p.add_argument("--keyframes", type=int, default=300)
     p.add_argument("--batch", type=int, default=64)
     p = sub.add_parser("selftest")
-    p.add_argument("--parts", nargs="+", default=["recall", "train1", "train2", "resume", "descriptors"])
+    p.add_argument("--parts", nargs="+",
+                   default=["recall", "train1", "train2", "resume", "descriptors", "centered"])
     p.add_argument("--out-json", type=Path, default=None)
     a = ap.parse_args()
     if a.cmd == "train1":

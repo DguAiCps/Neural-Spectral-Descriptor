@@ -68,8 +68,15 @@ _external/seqot_official_pdv2/range):
 Subcommands (inside ring_baseline):
   config                     our config copy (official HEAD values, our paths)
   index [--role R ...] [--seq S ...]   index.npz + empty range.npy per sequence
-  jobs [--chunk 2000] [--role R ...] [--seq S ...]   "role seq shard nshards" range jobs
-  gen --role R --seq S --shard k --nshards n
+  jobs [--chunk 2000] [--role R ...] [--seq S ...] [--part base|ext]
+                             "role seq shard nshards" range jobs
+  gen --role R --seq S --shard k --nshards n [--part base|ext]
+  verify --role R --seq S [--n 3]   stored rows == fresh projections (spot check)
+  complete --role R --seq S [--part base|ext|centered]   exit 0 if complete
+  Centred evaluation windows read raw scans [s-11, s+10] of each keyframe s;
+  the rows a val / test store lacks for that (the store holds [s-21, s]) live
+  in an extension part (ext_index.npz, range_ext.npy, ext_done_*.json) next to
+  the unchanged base files (index --part ext|both, jobs/gen --part ext).
   frames --seq S             5th-scan point store for overlap labels (train)
   ovjobs [--nshards 16]      "seq shard nshards" overlap jobs
   overlap --seq S --shard k --nshards n
@@ -133,6 +140,11 @@ TAU = 1.2              # com_overlap_yaw.py:77
 SEQL, GEM_SEQLEN = 3, 20   # config.yml training_seqot.seqlen / training_gem.seqlen
 BACK = (SEQL - 1) + (GEM_SEQLEN - 1)   # raw scans behind a keyframe that its
 #                                        trailing descriptor reads (21)
+# The official centred descriptor of a keyframe at raw scan s pools the
+# sub-descriptors [s-10, s+9] (read_samples.py:99), each reading raw scans
+# [x-1, x+1] (read_samples.py:20): raw scans [s-11, s+10].
+C_BACK = SEQL // 2 + GEM_SEQLEN // 2                              # 11
+C_FWD = (SEQL - 1 - SEQL // 2) + (GEM_SEQLEN - 1 - GEM_SEQLEN // 2)  # 10
 SHORTCUT_MARGIN = 1.0  # m, see module docstring
 # gen_training_index.py:81-95 -- (lower, upper, count) in drawing order
 BINS = [(0.7, 1.1, 15000), (0.5, 0.7, 15000), (0.3, 0.5, 15000),
@@ -411,11 +423,57 @@ def needed_raw_ids(role: str, kf: np.ndarray, n_raw: int) -> np.ndarray:
     return np.flatnonzero(np.cumsum(mark)[:n_raw] > 0).astype(np.int64)
 
 
-def cmd_index(role: str, only=None):
+def centered_raw_ids(kf: np.ndarray, n_raw: int) -> np.ndarray:
+    """Raw scans read by the official centred descriptors of the keyframes."""
+    lo = np.maximum(kf - C_BACK, 0)
+    hi = np.minimum(kf + C_FWD + 1, n_raw)
+    mark = np.zeros(n_raw + 1, dtype=np.int64)
+    np.add.at(mark, lo, 1)
+    np.add.at(mark, hi, -1)
+    return np.flatnonzero(np.cumsum(mark)[:n_raw] > 0).astype(np.int64)
+
+
+def _index_ext(role: str, sensor: str, seq: str):
+    """Extension part of a val / test store for centred evaluation windows:
+    the raw scans of centered_raw_ids that the base store (trailing rows,
+    index.npz -- possibly a restored copy) does not hold.  The base files are
+    never rewritten; the ext part has its own index / memmap / done markers.
+    Consistency: the base raw_ids were just checked against the cache, the
+    ext ids are disjoint from them and base + ext covers every centred row."""
+    d = store_dir(role, sensor, seq)
+    with np.load(d / "index.npz") as z:
+        base, kf, n_raw = z["raw_ids"], z["kf_scan_ids"], int(z["n_raw"])
+    need = centered_raw_ids(kf, n_raw)
+    ext = np.setdiff1d(need, base).astype(np.int64)
+    assert not np.intersect1d(ext, base).size
+    assert np.isin(need, np.union1d(base, ext)).all()
+    f = d / "ext_index.npz"
+    if f.exists():
+        with np.load(f) as z:
+            assert np.array_equal(z["raw_ids"], ext), f"{d}: ext index changed"
+    else:
+        np.savez(f, raw_ids=ext, n_raw=np.int64(n_raw), base_rows=np.int64(len(base)))
+    if len(ext) and not (d / "range_ext.npy").exists():
+        mm = np.lib.format.open_memmap(d / "range_ext.npy", mode="w+", dtype=np.float32,
+                                       shape=(len(ext), H, W))
+        del mm
+    if not len(ext):
+        _write_json(d / "ext_done_0of1.json", {"rows": [0, 0], "s": 0.0})
+    print(f"OK index-ext {role}/{seq_name(sensor, seq)}: {len(ext)} extra rows "
+          f"(centred needs {len(need)}, base holds {len(base)})", flush=True)
+
+
+def cmd_index(role: str, only=None, part="base"):
+    """part 'base' (as before), 'ext' (centred extension, base must exist) or
+    'both'.  Train stores hold every raw scan and have no extension."""
     from _pd_build_test_caches import _make_loader
     seqs, _, _, pose_key = ROLES[role]
     for sensor, seq in seqs:
         if only and f"{sensor}/{seq}" not in only:
+            continue
+        if part == "ext":
+            if role != "train":
+                _index_ext(role, sensor, seq)
             continue
         d = store_dir(role, sensor, seq)
         d.mkdir(parents=True, exist_ok=True)
@@ -439,6 +497,11 @@ def cmd_index(role: str, only=None):
             mm = np.lib.format.open_memmap(rng, mode="w+", dtype=np.float32,
                                            shape=(len(raw_ids), H, W))
             del mm
+        else:   # e.g. a restored copy: same rows, same cache
+            assert np.load(rng, mmap_mode="r").shape == (len(raw_ids), H, W), f"{rng}: shape"
+            if (d / "meta.json").exists():
+                old = json.loads((d / "meta.json").read_text()).get("cache_sha256")
+                assert old in (None, sha256(cp)), f"{d}: built from another cache"
         meta = {"role": role, "sensor": sensor, "sequence": seq, "n_raw": int(n_raw),
                 "n_rows": int(len(raw_ids)), "n_keyframes": int(len(kf)),
                 "rows": "all raw scans" if role == "train" else
@@ -452,15 +515,25 @@ def cmd_index(role: str, only=None):
         print(f"OK index {role}/{seq_name(sensor, seq)}: {len(raw_ids)} rows "
               f"({n_raw} raw, {len(kf)} keyframes)", flush=True)
         del loader
+        if part == "both" and role != "train":
+            _index_ext(role, sensor, seq)
 
 
-def cmd_jobs(chunk: int, roles, only=None):
+def cmd_jobs(chunk: int, roles, only=None, part="base"):
+    """'role seq shard nshards' lines (part 'ext': the extension rows; a
+    store whose part is already complete prints nothing)."""
     for role in roles:
         for sensor, seq in ROLES[role][0]:
             if only and f"{sensor}/{seq}" not in only:
                 continue
-            with np.load(store_dir(role, sensor, seq) / "index.npz") as z:
-                n = len(z["raw_ids"])
+            if part == "ext":
+                if role == "train" or range_complete(role, sensor, seq, "ext"):
+                    continue
+                with np.load(store_dir(role, sensor, seq) / "ext_index.npz") as z:
+                    n = len(z["raw_ids"])
+            else:
+                with np.load(store_dir(role, sensor, seq) / "index.npz") as z:
+                    n = len(z["raw_ids"])
             k = max(1, -(-n // chunk))
             for s in range(k):
                 print(role, f"{sensor}/{seq}", s, k)
@@ -472,19 +545,21 @@ def _shard_rows(n, shard, nshards):
     return a, b
 
 
-def cmd_gen(role: str, key: str, shard: int, nshards: int):
+def cmd_gen(role: str, key: str, shard: int, nshards: int, part="base"):
     from _pd_build_test_caches import _make_loader
     sensor, seq = key.split("/")
     assert (sensor, seq) in ROLES[role][0], (role, key)
     d = store_dir(role, sensor, seq)
-    done = d / f"done_{shard}of{nshards}.json"
+    pre, idx, arr = ("", "index.npz", "range.npy") if part == "base" else \
+        ("ext_", "ext_index.npz", "range_ext.npy")
+    done = d / f"{pre}done_{shard}of{nshards}.json"
     if done.exists():
-        print(f"SKIP {role}/{key} shard {shard}/{nshards}: done", flush=True)
+        print(f"SKIP {role}/{key} {part} shard {shard}/{nshards}: done", flush=True)
         return
-    with np.load(d / "index.npz") as z:
+    with np.load(d / idx) as z:
         raw_ids = z["raw_ids"]
     a, b = _shard_rows(len(raw_ids), shard, nshards)
-    mm = np.load(d / "range.npy", mmap_mode="r+")
+    mm = np.load(d / arr, mmap_mode="r+")
     loader = _make_loader(sensor, seq)
     t0 = time.time()
     for r in range(a, b):
@@ -499,26 +574,63 @@ def cmd_gen(role: str, key: str, shard: int, nshards: int):
           f"{time.time() - t0:.0f} s", flush=True)
 
 
-def range_complete(role: str, sensor: str, seq: str) -> bool:
+def range_complete(role: str, sensor: str, seq: str, part="base") -> bool:
+    """part 'base' (trailing rows, as before), 'ext' (centred extension) or
+    'centered' (base and ext)."""
+    if part == "centered":
+        return range_complete(role, sensor, seq) and (
+            role == "train" or range_complete(role, sensor, seq, "ext"))
     d = store_dir(role, sensor, seq)
-    if not (d / "index.npz").exists():
+    pre, idx = ("", "index.npz") if part == "base" else ("ext_", "ext_index.npz")
+    if not (d / idx).exists():
         return False
-    with np.load(d / "index.npz") as z:
+    with np.load(d / idx) as z:
         n = len(z["raw_ids"])
     cover = np.zeros(n, dtype=bool)
-    for f in d.glob("done_*of*.json"):
+    for f in d.glob(f"{pre}done_*of*.json"):      # "done_*" never matches "ext_done_*"
         a, b = json.loads(f.read_text())["rows"]
         cover[a:b] = True
     return bool(cover.all())
 
 
-def open_store(role: str, sensor: str, seq: str):
-    """(range memmap, raw_ids, kf_scan_ids, kf_poses, n_raw) of a complete store."""
+def open_store(role: str, sensor: str, seq: str, ext=False):
+    """(range memmap, raw_ids, kf_scan_ids, kf_poses, n_raw) of a complete store;
+    ext=True appends (ext memmap or None, ext raw_ids) of the centred extension."""
     assert range_complete(role, sensor, seq), f"range store incomplete: {role}/{sensor}/{seq}"
     d = store_dir(role, sensor, seq)
     with np.load(d / "index.npz") as z:
         out = (z["raw_ids"], z["kf_scan_ids"], z["kf_poses"], int(z["n_raw"]))
-    return (np.load(d / "range.npy", mmap_mode="r"),) + out
+    out = (np.load(d / "range.npy", mmap_mode="r"),) + out
+    if not ext:
+        return out
+    if role == "train":
+        return out + (None, np.zeros(0, np.int64))
+    assert range_complete(role, sensor, seq, "ext"), f"centred extension incomplete: {role}/{sensor}/{seq}"
+    with np.load(d / "ext_index.npz") as z:
+        ext_ids = z["raw_ids"]
+    mm = np.load(d / "range_ext.npy", mmap_mode="r") if len(ext_ids) else None
+    return out + (mm, ext_ids)
+
+
+def cmd_verify(role: str, key: str, n: int):
+    """Spot check of a (restored + extended) store: n base rows and n ext
+    rows re-projected from the loader must equal the stored images."""
+    from _pd_build_test_caches import _make_loader
+    sensor, seq = key.split("/")
+    d = store_dir(role, sensor, seq)
+    L = _make_loader(sensor, seq)
+    checked = 0
+    for idx, arr in (("index.npz", "range.npy"), ("ext_index.npz", "range_ext.npy")):
+        if not (d / idx).exists() or not (d / arr).exists():
+            continue
+        with np.load(d / idx) as z:
+            ids = z["raw_ids"]
+        mm = np.load(d / arr, mmap_mode="r")
+        for r in np.unique(np.linspace(0, len(ids) - 1, min(n, len(ids))).round().astype(int)):
+            assert np.array_equal(mm[r], range_image(sensor, L[int(ids[r])]["points"])), \
+                f"{d}/{arr} row {r} (raw {ids[r]}) differs from a fresh projection"
+            checked += 1
+    print(f"OK verify {role}/{key}: {checked} rows equal fresh projections", flush=True)
 
 
 # ------------------------------------------------------------ overlap labels
@@ -1065,15 +1177,26 @@ def main():
     p = sub.add_parser("index")
     p.add_argument("--role", choices=tuple(ROLES), nargs="+", default=list(ROLES))
     p.add_argument("--seq", nargs="+", default=None)
+    p.add_argument("--part", choices=("base", "ext", "both"), default="base")
     p = sub.add_parser("jobs")
     p.add_argument("--chunk", type=int, default=2000)
     p.add_argument("--role", choices=tuple(ROLES), nargs="+", default=list(ROLES))
     p.add_argument("--seq", nargs="+", default=None)
+    p.add_argument("--part", choices=("base", "ext"), default="base")
     p = sub.add_parser("gen")
     p.add_argument("--role", choices=tuple(ROLES), required=True)
     p.add_argument("--seq", required=True)
     p.add_argument("--shard", type=int, default=0)
     p.add_argument("--nshards", type=int, default=1)
+    p.add_argument("--part", choices=("base", "ext"), default="base")
+    p = sub.add_parser("verify")
+    p.add_argument("--role", choices=tuple(ROLES), required=True)
+    p.add_argument("--seq", required=True)
+    p.add_argument("--n", type=int, default=3)
+    p = sub.add_parser("complete")
+    p.add_argument("--role", choices=tuple(ROLES), required=True)
+    p.add_argument("--seq", required=True)
+    p.add_argument("--part", choices=("base", "ext", "centered"), default="base")
     p = sub.add_parser("frames")
     p.add_argument("--seq", required=True)
     p = sub.add_parser("ovjobs")
@@ -1101,11 +1224,16 @@ def main():
         cmd_config()
     elif a.cmd == "index":
         for r in a.role:
-            cmd_index(r, a.seq)
+            cmd_index(r, a.seq, a.part)
     elif a.cmd == "jobs":
-        cmd_jobs(a.chunk, a.role, a.seq)
+        cmd_jobs(a.chunk, a.role, a.seq, a.part)
     elif a.cmd == "gen":
-        cmd_gen(a.role, a.seq, a.shard, a.nshards)
+        cmd_gen(a.role, a.seq, a.shard, a.nshards, a.part)
+    elif a.cmd == "verify":
+        cmd_verify(a.role, a.seq, a.n)
+    elif a.cmd == "complete":
+        s_, q_ = a.seq.split("/")
+        sys.exit(0 if range_complete(a.role, s_, q_, a.part) else 1)
     elif a.cmd == "frames":
         cmd_frames(a.seq)
     elif a.cmd == "ovjobs":

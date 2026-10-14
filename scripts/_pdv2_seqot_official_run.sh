@@ -12,6 +12,7 @@
 #   smoke     GPU timing / memory on small subsets (separate dirs, not results)
 #   train1    phase 1 (featureExtracter), official code recipe: lr 5e-7,
 #             epochs 1..99, 1 + 3 + 3, centred windows; resumes
+#   valext    centred-window extension rows of the val stores (centered mode)
 #   select1   score phase-1 epochs on v2 VAL (FOLLOW=1: wait for new epochs,
 #             can run on a second GPU while train1 runs)
 #   subdesc   official gen_sub_descriptors with the chosen phase-1 weights
@@ -38,16 +39,31 @@
 #   _external/seqot_official_pdv2/s{k}/{runs,subdesc,desc,dryrun}
 #   results/pdv2_seqot_official_s{k}/   logs/seqot_official_pdv2_s{k}/
 # and shares range images (train/val/test), frames, labels and config.
+# SEQOT_EVAL_WINDOW (default centered, user decision 2026-10-14) = evaluation
+# windows of select1 / select2 / dump: centered = the official windows (main
+# table), trailing = past-only windows (auxiliary; the original locations).
+# centered uses results/pdv2_seqot_official_centered{_s{k}}/,
+# logs/seqot_official_pdv2_centered{_s{k}}/ and <seed work>/centered/ for the
+# VAL cache, test descriptors and (if its phase-1 choice differs from the
+# trailing one) its own phase 2; runs/stage1, range images, frames, labels and
+# config are shared.  Centred windows read raw scans [s-11, s+10]: val / test
+# stores get an extension part with the missing future rows (stage valext,
+# dump); existing (or restored) base rows are reused, never rewritten.
 # dump reuses complete test range stores; it deletes a sequence's store after
-# its ledgers only when KEEP_TEST_RANGE=0 (default 0 for SEED=1, 1 otherwise).
+# its ledgers only when KEEP_TEST_RANGE=0 (default 0 only for SEED=1 trailing,
+# 1 otherwise).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PYTHONDONTWRITEBYTECODE=1
 export CUDA_VISIBLE_DEVICES=${GPU:-0}
 SEED=${SEED:-1}
 export SEED
+SEQOT_EVAL_WINDOW=${SEQOT_EVAL_WINDOW:-centered}
+export SEQOT_EVAL_WINDOW
+case "$SEQOT_EVAL_WINDOW" in centered) MSFX=_centered ;; trailing) MSFX="" ;;
+  *) echo "SEQOT_EVAL_WINDOW must be centered or trailing"; exit 2 ;; esac
 if [ "$SEED" = 1 ]; then SFX=""; else SFX="_s$SEED"; fi
-LOG=logs/seqot_official_pdv2$SFX
+LOG=logs/seqot_official_pdv2$MSFX$SFX
 P="python3 scripts/_seqot_official_prep.py"
 T="python3 scripts/_seqot_official_train.py"
 D="python3 scripts/_seqot_official_dump.py"
@@ -56,9 +72,12 @@ TRAIN1_FLAGS=${TRAIN1_FLAGS:-}
 TRAIN2_FLAGS=${TRAIN2_FLAGS:-}
 W=_external/seqot_official_pdv2                       # shared: range, frames, labels, config
 if [ "$SEED" = 1 ]; then WS=$W; else WS=$W/s$SEED; fi   # this seed's runs, subdesc, desc
-RES=results/pdv2_seqot_official$SFX
+if [ "$SEQOT_EVAL_WINDOW" = trailing ]; then WM=$WS; else WM=$WS/centered; fi   # this mode's own work dir
+RES=results/pdv2_seqot_official$MSFX$SFX
 SEL=$RES/train_selection.json
-if [ "$SEED" = 1 ]; then KEEP_TEST_RANGE=${KEEP_TEST_RANGE:-0}; else KEEP_TEST_RANGE=${KEEP_TEST_RANGE:-1}; fi
+if [ "$SEED" = 1 ] && [ "$SEQOT_EVAL_WINDOW" = trailing ]; then KEEP_TEST_RANGE=${KEEP_TEST_RANGE:-0}
+else KEEP_TEST_RANGE=${KEEP_TEST_RANGE:-1}; fi
+if [ "$SEQOT_EVAL_WINDOW" = centered ]; then PART=centered; else PART=base; fi
 mkdir -p "$LOG"
 say() { echo "[seqot-official] $* ($(date '+%F %T'))"; }
 
@@ -72,7 +91,7 @@ stage_selftest() {
   say selftest
   CUDA_VISIBLE_DEVICES= $P selftest --n-scans 2 --out-json "$LOG/selftest_prep.json" \
     > "$LOG/selftest_prep.log" 2>&1
-  CUDA_VISIBLE_DEVICES= $T selftest --parts recall train1 train2 resume descriptors \
+  CUDA_VISIBLE_DEVICES= $T selftest --parts recall train1 train2 resume descriptors centered \
     --out-json "$LOG/selftest_train.json" > "$LOG/selftest_train.log" 2>&1
   CUDA_VISIBLE_DEVICES= $D dry-run-cpu --seq nclt/2013-01-10 --n 80 --out-dir "$WS/dryrun" \
     > "$LOG/selftest_dryrun.log" 2>&1
@@ -97,7 +116,19 @@ stage_prep() {
        >> "'"$LOG"'/prep_overlap_${0//\//_}.log" 2>&1'
   say "prep labels"
   $P labels > "$LOG/prep_labels.log" 2>&1
+  [ "$SEQOT_EVAL_WINDOW" = centered ] && stage_valext
   $P status | tail -5
+}
+
+stage_valext() {      # centred-window extension rows of the val stores (base rows reused)
+  say "valext ($NPROC parallel)"
+  $P index --role val --part ext > "$LOG/valext_index.log" 2>&1
+  $P jobs --role val --part ext | xargs -r -P "$NPROC" -L 1 bash -c \
+    'python3 scripts/_seqot_official_prep.py gen --part ext --role "$0" --seq "$1" --shard "$2" --nshards "$3" \
+       >> "'"$LOG"'/valext_gen_$0_${1//\//_}.log" 2>&1'
+  python3 -c "import sys; sys.path.insert(0, 'scripts'); from _pdv2_pilot import VAL; \
+from _seqot_official_prep import range_complete as c; bad = [f'{s}/{q}' for s, q in VAL if not c('val', s, q, 'centered')]; \
+print('VALEXT_COMPLETE' if not bad else f'VALEXT_INCOMPLETE {bad}'); sys.exit(1 if bad else 0)"
 }
 
 stage_smoke() {
@@ -131,7 +162,7 @@ stage_subdesc() {
 }
 
 stage_train2() {
-  if [ -f "$WS/runs/stage2/finished" ]; then say "train2: finished, skip"; return; fi
+  if [ -f "$WM/runs/stage2/finished" ]; then say "train2: finished, skip"; return; fi
   say "train2 $TRAIN2_FLAGS"
   $T train2 $TRAIN2_FLAGS >> "$LOG/train2.log" 2>&1
   tail -1 "$LOG/train2.log"
@@ -152,8 +183,7 @@ stage_dump() {
        [ -f "$RES/odom/dump_seqotl2_${s}_${q}.npz" ]; then
       continue
     fi
-    if python3 -c "import sys; sys.path.insert(0, 'scripts'); from _seqot_official_prep import range_complete; \
-sys.exit(0 if range_complete('test_odom', '$s', '$q') else 1)"; then
+    if $P complete --role test_odom --seq "$key" --part "$PART"; then
       say "dump $key: range images complete, reused"
     else
       say "dump $key: range images"
@@ -161,7 +191,16 @@ sys.exit(0 if range_complete('test_odom', '$s', '$q') else 1)"; then
       $P jobs --role test_odom --seq "$key" --chunk 1000 | xargs -r -P "$NPROC" -L 1 bash -c \
         'python3 scripts/_seqot_official_prep.py gen --role "$0" --seq "$1" --shard "$2" --nshards "$3" \
            >> "'"$LOG"'/dump_gen_${1//\//_}.log" 2>&1'
+      if [ "$PART" = centered ]; then    # future rows of the centred windows, base rows reused
+        $P index --role test_odom --seq "$key" --part ext >> "$LOG/dump_index.log" 2>&1
+        $P jobs --role test_odom --seq "$key" --part ext --chunk 1000 | xargs -r -P "$NPROC" -L 1 bash -c \
+          'python3 scripts/_seqot_official_prep.py gen --part ext --role "$0" --seq "$1" --shard "$2" --nshards "$3" \
+             >> "'"$LOG"'/dump_gen_${1//\//_}.log" 2>&1'
+      fi
+      $P complete --role test_odom --seq "$key" --part "$PART" || { echo "range store incomplete: $key"; exit 1; }
     fi
+    $P verify --role test_odom --seq "$key" --n 3 >> "$LOG/dump_verify.log" 2>&1 || {
+      echo "range store differs from fresh projections: $key"; exit 1; }
     say "dump $key: ledgers"
     $D dump --seqs "$key" >> "$LOG/dump.log" 2>&1
     tail -1 "$LOG/dump.log"

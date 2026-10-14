@@ -26,8 +26,19 @@ data/preprocessed_v2_odom (scan_ids; poses_gt only for scoring):
      REPORTED ledger: seqotl2 (official L2; user decision 2026-10-11);
      seqot (cosine) is kept as a record.
 
+Evaluation windows (env SEQOT_EVAL_WINDOW, see _seqot_official_train.py):
+  centered (default since 2026-10-14, main table): the official windows,
+     sub-descriptor raw [s-1, s+1], GeM [s-10, s+9] over the N + 1-row
+     sub-descriptor array; a query reads raw scans up to s_q + 10, observed
+     before the main protocol decides at keyframe q + 15 (>= 15 raw scans
+     later); every candidate j <= q - 30 reads raw scans <= s_j + 10 < s_q.
+     Ledgers in results/pdv2_seqot_official_centered{_sN}/odom.
+  trailing (auxiliary, the windows described above): unchanged locations.
+
 Subcommands (inside ring_baseline):
-  dump [--seqs S ...] [--worker]   one worker subprocess per sequence
+  dump [--seqs S ...] [--worker] [--out-dir D]   one worker subprocess per
+                                   sequence; --out-dir writes the ledgers to D
+                                   only (re-check, no descriptor file)
   aggregate                        PR summary via _pdv2_c3 (unchanged)
   dry-run-cpu --seq S --n N --out-dir D   CPU format check, untrained net,
                                    range images computed on the fly
@@ -52,10 +63,10 @@ from _seqot_official_prep import (  # noqa: E402
     WORK, cache_path, range_image, seq_name, sha256, store_dir)
 from _pr_eval_lib import MIN_INDEX_GAP  # noqa: E402
 from _seqot_official_train import (  # noqa: E402  (torch-free at import)
-    SEED_RESULTS, SEED_WORK, SELECTION, TRAIN_SEED)
+    C_BACK, C_FWD, EVAL_WINDOW, MODE_RESULTS, MODE_WORK, SELECTION, TRAIN_SEED)
 
-OUT = SEED_RESULTS / "odom"                  # SEED = 1: results/pdv2_seqot_official/odom
-DESC = SEED_WORK / "desc" / "test_odom"      # SEED = 1: _external/seqot_official_pdv2/desc/test_odom
+OUT = MODE_RESULTS / "odom"                  # trailing, SEED = 1: results/pdv2_seqot_official/odom
+DESC = MODE_WORK / "desc" / "test_odom"      # trailing, SEED = 1: _external/seqot_official_pdv2/desc/test_odom
 METHODS = {"seqot": "score_cos", "seqotl2": "score_l2"}
 REPORTED = "seqotl2"   # user decision 2026-10-11: official L2 retrieval
 
@@ -92,6 +103,16 @@ def _meta(sensor, q, n, arrays, score, extra):
                       "at evaluation (the paper describes m past scans). SeqOT reads up to "
                       f"{BACK} past raw scans behind each keyframe (other methods read the "
                       "keyframe scan only).",
+         **({} if EVAL_WINDOW == "trailing" else {
+             "eval_window": "centered",
+             "window": "official centred raw-scan windows: sub-descriptor [x-1, x+1] "
+                       "(read_samples.py:20), GeM [s-10, s+9] (read_samples.py:99) over the "
+                       "N + 1-row sub-descriptor array of gen_sub_descriptors.py:51; official "
+                       "fallbacks (incomplete window -> the centre scan / descriptor)",
+             "deviation": f"none in the windows (official). A query reads raw scans [s-{C_BACK}, "
+                          f"s+{C_FWD}]; the main protocol decides q at keyframe q+15 (>= 15 raw "
+                          "scans later), candidates j <= q-30 read raw scans <= s_j+10 < s_q. "
+                          "Other methods read the keyframe scan only."}),
          "official": {"repo": OFFICIAL_REPO, "commit": OFFICIAL_COMMIT,
                       "code": "modules/seqTransformerCat.featureExtracter, modules/gem.GeM, "
                               "tools/utils/utils.range_projection"},
@@ -107,9 +128,9 @@ def _meta(sensor, q, n, arrays, score, extra):
 
 
 def encode_sequence(fe, gem, dev, src, batch):
-    from _seqot_official_train import trailing_final_descriptors
+    from _seqot_official_train import final_descriptors
     t0 = time.time()
-    final, _, need = trailing_final_descriptors(fe, gem, src, src.kf, dev, batch)
+    final, _, need = final_descriptors(fe, gem, src, src.kf, dev, batch)   # EVAL_WINDOW
     return final, need, time.time() - t0
 
 
@@ -136,22 +157,23 @@ def write_dump(sensor, q, final, positions, out_dir, extra):
     return paths
 
 
-def run_worker(sensor, q, batch):
+def run_worker(sensor, q, batch, out_dir=None):
     import torch
     from _seqot_official_train import StoreSource, _chosen, _load_fe, _load_gem, device
     dev = device()
     p1, c1 = _chosen("stage1")
     p2, c2 = _chosen("stage2")
     fe, gem = _load_fe(p1, dev), _load_gem(p2, dev)
-    src = StoreSource("test_odom", sensor, q)
+    src = StoreSource("test_odom", sensor, q, ext=(EVAL_WINDOW == "centered"))
     cp = cache_path("test_odom", sensor, q)
     with np.load(cp) as z:
         assert np.array_equal(z["scan_ids"], src.kf), f"{sensor}/{q}: keyframes != cache"
         assert np.array_equal(z["poses_gt"], src.kf_poses), f"{sensor}/{q}: poses_gt != cache"
     final, need, t_enc = encode_sequence(fe, gem, dev, src, batch)
-    DESC.mkdir(parents=True, exist_ok=True)
-    np.savez(DESC / f"{seq_name(sensor, q)}.npz", final=final, kf_scan_ids=src.kf,
-             stage1_sha256=c1["sha256"], stage2_sha256=c2["sha256"])
+    if out_dir is None:
+        DESC.mkdir(parents=True, exist_ok=True)
+        np.savez(DESC / f"{seq_name(sensor, q)}.npz", final=final, kf_scan_ids=src.kf,
+                 stage1_sha256=c1["sha256"], stage2_sha256=c2["sha256"])
     rmeta = json.loads((store_dir("test_odom", sensor, q) / "meta.json").read_text())
     extra = {"artifacts": {"stage1": c1, "stage2": c2,
                            "selection": str(SELECTION.relative_to(REPO))},
@@ -162,24 +184,26 @@ def run_worker(sensor, q, batch):
              "timing": {"encode_s": round(t_enc, 1),
                         "encode_ms_per_kf": round(1e3 * t_enc / max(len(final), 1), 2)},
              "device": str(dev), "torch": torch.__version__}
-    write_dump(sensor, q, final, src.kf_poses[:, :3, 3], OUT, extra)
+    write_dump(sensor, q, final, src.kf_poses[:, :3, 3], Path(out_dir) if out_dir else OUT, extra)
 
 
-def cmd_dump(seqs, worker, overwrite, batch):
+def cmd_dump(seqs, worker, overwrite, batch, out_dir=None):
     todo = seqs or [f"{s}/{q}" for s, q in TEST]
     unknown = sorted(set(todo) - {f"{s}/{q}" for s, q in TEST})
     assert not unknown, f"not split-v2 test sequences: {unknown}"
     if worker:
         assert len(todo) == 1
-        run_worker(*todo[0].split("/"), batch)
+        run_worker(*todo[0].split("/"), batch, out_dir)
         return
     for key in todo:
         s, q = key.split("/")
-        if all((OUT / f"dump_{m}_{s}_{q}.npz").exists() for m in METHODS) and not overwrite:
+        dest = Path(out_dir) if out_dir else OUT
+        if all((dest / f"dump_{m}_{s}_{q}.npz").exists() for m in METHODS) and not overwrite:
             print(f"[skip] {key}", flush=True)
             continue
         rc = subprocess.run([sys.executable, str(Path(__file__).resolve()), "dump", "--worker",
-                             "--seqs", key, "--batch", str(batch)]).returncode
+                             "--seqs", key, "--batch", str(batch)]
+                            + (["--out-dir", str(out_dir)] if out_dir else [])).returncode
         if rc:
             print(f"WORKER_FAILED {key} rc={rc}", flush=True)
             sys.exit(rc)
@@ -188,7 +212,7 @@ def cmd_dump(seqs, worker, overwrite, batch):
 
 def cmd_aggregate():
     import _pdv2_c3 as c3
-    c3.OUT_ROOT = SEED_RESULTS
+    c3.OUT_ROOT = MODE_RESULTS
     c3.BASELINES = dict(METHODS)
     c3.cmd_aggregate_baselines("odom")
     p = OUT / "pr_summary_baselines.json"
@@ -201,6 +225,9 @@ def cmd_aggregate():
     s["_meta"]["reported"] = REPORTED
     if TRAIN_SEED != 1:     # SEED = 1 output unchanged
         s["_meta"]["train_seed"] = TRAIN_SEED
+    if EVAL_WINDOW != "trailing":
+        s["_meta"]["eval_window"] = ("centered: official windows (main table; decision at "
+                                     "keyframe q + 15)")
     p.write_text(json.dumps(s, indent=2))
 
 
@@ -221,7 +248,8 @@ def cmd_dry_run_cpu(key, n, out_dir):
         kf = z["scan_ids"][:n].astype(np.int64)
         pos = z["poses_gt"][:n, :3, 3].astype(np.float64)
     L = _make_loader(sensor, q)
-    need = sorted({int(r) for s in kf for r in range(max(0, s - BACK), s + 1)})
+    lo, hi = (BACK, 0) if EVAL_WINDOW == "trailing" else (C_BACK, C_FWD)
+    need = sorted({int(r) for s in kf for r in range(max(0, s - lo), min(len(L), s + hi + 1))})
     t0 = time.time()
     src = DictSource({r: range_image(sensor, L[r]["points"]) for r in need})
     src.n_raw, src.kf = len(L), kf
@@ -271,6 +299,7 @@ def main():
     p.add_argument("--worker", action="store_true")
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--batch", type=int, default=64)
+    p.add_argument("--out-dir", default=None)
     sub.add_parser("aggregate")
     p = sub.add_parser("dry-run-cpu")
     p.add_argument("--seq", required=True)
@@ -278,7 +307,7 @@ def main():
     p.add_argument("--out-dir", required=True)
     a = ap.parse_args()
     if a.cmd == "dump":
-        cmd_dump(a.seqs, a.worker, a.overwrite, a.batch)
+        cmd_dump(a.seqs, a.worker, a.overwrite, a.batch, a.out_dir)
     elif a.cmd == "aggregate":
         cmd_aggregate()
     elif a.cmd == "dry-run-cpu":
