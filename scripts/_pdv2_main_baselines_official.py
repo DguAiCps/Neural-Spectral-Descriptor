@@ -33,6 +33,9 @@ METHODS = (
      "pr_summary_ring_official.json", "ring"),
     ("ringpp", "results/pdv2_ring_official/odom", "dump_ringpp", "score_corr",
      "pr_summary_ring_official.json", "ringpp"),
+    # 주 점수 score_trans(이동 재정렬 1위의 −오차, 사전 등록 §1.5); 공식 PR 방식 score_rotbranch는 비교용
+    ("ringsharp", "results/pdv2_ring_official/odom", "dump_ringsharp", "score_trans",
+     "pr_summary_ring_official.json", "ringsharp:score_trans"),
     ("deepring", "results/pdv2_deepring_reimpl/odom", "dump_deepring", "score_corr",
      "pr_summary_baselines.json", "deepring"),
     # 주표는 공식 가운데 정렬 창(2026-10-14 사용자 결정), 보고 거리는 공식 L2
