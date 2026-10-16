@@ -180,7 +180,7 @@ print(' '.join(f'{s}/{q}' for s, q in TEST))")
       continue
     fi
     say "test $key: riv"
-    $R jobs --role test_odom --seq "$key" | gen_jobs
+    $R jobs --role test_odom --seq "$key" --chunk "${RIV_CHUNK:-2000}" | gen_jobs   # RIV_CHUNK: frames per shard (results-neutral)
     say "test $key: dump"
     $D dump --seqs "$key" >> "$LOG/dump.log" 2>&1
     if [ "${KEEP_TEST_RIV:-$KEEP_DEFAULT}" != 1 ]; then
