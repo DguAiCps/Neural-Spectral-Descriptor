@@ -38,6 +38,8 @@ METHODS = (
      "pr_summary_ring_official.json", "ringsharp:score_trans"),
     ("deepring", "results/pdv2_deepring_reimpl/odom", "dump_deepring", "score_corr",
      "pr_summary_baselines.json", "deepring"),
+    ("helios", "results/pdv2_helios_official/odom", "dump_helios", "score_cos",
+     "pr_summary_baselines.json", "helios"),
     # 주표는 공식 가운데 정렬 창(2026-10-14 사용자 결정), 보고 거리는 공식 L2
     ("seqot", "results/pdv2_seqot_official_centered/odom", "dump_seqotl2", "score_l2",
      "pr_summary_baselines.json", "seqotl2"),
