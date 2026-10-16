@@ -23,7 +23,12 @@ Retrieval (official depth, tools/evaluate_ours_gl.py with the README flag
 --n_rerank 1000): rotation branch (estimate_yaw, batches of 128) ranks ALL
 candidates by 1 - score; the first 1000 are re-ordered by the translation
 branch (rotate_bev_batch at yaw and yaw - pi, solve_translation, element-wise
-min of the two errors); top-1 = the translation minimum.  Per test query t
+min of the two errors); top-1 = the translation minimum.  Query side as in
+evaluate_ours_gl.py:252-259 (RING#-L has trans_mode 0, so the query's
+bev_trans is None): the query's 128-channel BEV features are rotated FIRST
+and trans_cnn is applied to the rotated features; map side: trans_cnn of the
+unrotated map features (:247-250, :706, :722).  Fixed 2026-10-16: before, the query's
+trans_cnn output was rotated (wrong order; see TRANS_QUERY_PATH).  Per test query t
 the candidates are every keyframe j <= t - 30 (past only).  The translation
 errors come from trans_errors_exact, a vectorized copy of solve_translation's
 error line (its per-candidate python loop computes the same
@@ -112,6 +117,11 @@ BATCH = 128              # evaluate_ours_gl.py rank / rerank batch
 FEAT_BATCH = 8
 EPOCHS = 30
 N_XCHECK = 3
+# Query path of the translation branch; written into every val json, the
+# selection json and every ledger, and checked before an existing output is
+# reused (outputs made before the 2026-10-16 fix lack it and are refused).
+TRANS_QUERY_PATH = ("trans_cnn(rotate_bev_batch(query 128-ch BEV features)) "
+                    "[evaluate_ours_gl.py:252-259]")
 
 CONFIG_TEXT = """[DEFAULT]
 dataset = nsc
@@ -296,17 +306,35 @@ def rotation_branch(base, specs, qspec, cand):
     return np.concatenate(dists), np.concatenate(angles)
 
 
-def translation_branch(base, bts, qbt, cand, angles, official_loop):
+def translation_branch(base, trans_cnn, bts, qfeat, cand, angles, official_loop, dedup=True):
     """Official translation rerank of cand (angles from the rotation
-    branch): min over (yaw, yaw - pi) of the solve_translation error."""
+    branch): min over (yaw, yaw - pi) of the solve_translation error.
+    qfeat = the query's 128-channel BEV features (model output 'bev',
+    1 x C x H x W); as evaluate_ours_gl.py:252-259 they are rotated by each
+    candidate's angle and THEN passed through trans_cnn.  bts = trans_cnn of
+    the unrotated map features (:247-250).
+    dedup: the rotation branch yields at most 160 distinct angles, so
+    trans_cnn(rotate(qfeat, a)) is computed once per distinct float angle a
+    (the same float32 inputs the per-candidate call would get) and shared;
+    xcheck_translation compares it with the per-candidate computation."""
     import torch
     errs = []
     with torch.no_grad():
+        a1 = torch.tensor(angles, dtype=torch.float)
+        a2 = torch.tensor(angles - np.pi, dtype=torch.float)
+        if dedup:
+            uniq, inv = torch.unique(torch.cat([a1, a2]), return_inverse=True)
+            qmaps = torch.cat([trans_cnn(base.rotate_bev_batch(qfeat, uniq[k:k + BATCH]))
+                               for k in range(0, len(uniq), BATCH)])
+            inv1, inv2 = inv[:len(a1)], inv[len(a1):]
         for b0 in range(0, len(cand), BATCH):
-            ang = angles[b0:b0 + BATCH]
             cbt = bts[cand[b0:b0 + BATCH]]
-            q1 = base.rotate_bev_batch(qbt, torch.tensor(ang, dtype=torch.float))
-            q2 = base.rotate_bev_batch(qbt, torch.tensor(ang - np.pi, dtype=torch.float))
+            if dedup:
+                q1 = qmaps[inv1[b0:b0 + BATCH].to(qmaps.device)]
+                q2 = qmaps[inv2[b0:b0 + BATCH].to(qmaps.device)]
+            else:
+                q1 = trans_cnn(base.rotate_bev_batch(qfeat, a1[b0:b0 + BATCH]))
+                q2 = trans_cnn(base.rotate_bev_batch(qfeat, a2[b0:b0 + BATCH]))
             if official_loop:
                 e1 = base.solve_translation(q1, cbt)[2]
                 e2 = base.solve_translation(q2, cbt)[2]
@@ -317,12 +345,16 @@ def translation_branch(base, bts, qbt, cand, angles, official_loop):
     return np.concatenate(errs)
 
 
-def xcheck_translation(base, bts, qbt, cand, angles):
+def xcheck_translation(base, trans_cnn, bts, qfeat, cand, angles):
+    """Per-candidate official path (solve_translation loop, no angle dedup)
+    vs the path used (vectorized errors, deduplicated angles)."""
     cand, angles = cand[:XCHECK_MAX], angles[:XCHECK_MAX]
-    a = translation_branch(base, bts, qbt, cand, angles, True)
-    b = translation_branch(base, bts, qbt, cand, angles, False)
+    a = translation_branch(base, trans_cnn, bts, qfeat, cand, angles, True, dedup=False)
+    b = translation_branch(base, trans_cnn, bts, qfeat, cand, angles, False, dedup=True)
     d = float(np.abs(a - b).max())
-    assert d < 1e-6 and int(np.argmin(a)) == int(np.argmin(b)), (d, np.argmin(a), np.argmin(b))
+    gap = float(np.partition(a, 1)[1] - a.min()) if len(a) > 1 else 1.0
+    assert d < 1e-5 and (int(np.argmin(a)) == int(np.argmin(b)) or gap < 1e-5), \
+        (d, np.argmin(a), np.argmin(b))
     return {"n": int(len(cand)), "max_abs_diff": d}
 
 
@@ -352,6 +384,31 @@ def bev_batches_from_loader(base, loader, scan_ids, bounds):
             bevs.append(base.generate_bev(pts, Z=base.NSC_Z, Y=base.NSC_Y,
                                           X=base.NSC_X, bounds=bounds))
         yield torch.stack(bevs)
+
+
+def tee_packed(bev_batches, sink):
+    """Pass BEV batches through, keeping each frame's occupancy bits (sink)
+    so a query's 128-channel features can be recomputed later."""
+    for b in bev_batches:
+        bb = b.numpy()
+        assert set(np.unique(bb)) <= {0.0, 1.0}
+        sink.append(np.packbits(bb.reshape(len(bb), -1) > 0, axis=1))
+        yield b
+
+
+def query_features(base, model, packed_row, device):
+    """The query's 128-channel BEV features (RINGSharpL output 'bev'), as
+    evaluate_ours_gl.py compute_embedding_item returns them for a query."""
+    import torch
+    shape = (base.NSC_Z, base.NSC_Y, base.NSC_X)
+    b = np.unpackbits(packed_row, axis=1)[:, :int(np.prod(shape))]
+    with torch.no_grad():
+        return model({"pc": torch.from_numpy(b.reshape(1, *shape).astype(np.float32)).to(device),
+                      "img": None})["bev"]
+
+
+def _is_current(meta: dict) -> bool:
+    return meta.get("query_translation_path") == TRANS_QUERY_PATH
 
 
 def bev_batches_from_packed(base, packed):
@@ -398,8 +455,11 @@ def cmd_val(epoch, seq, official_loop):
     VAL_DIR.mkdir(parents=True, exist_ok=True)
     out = VAL_DIR / f"val_e{epoch}_{s}_{q}.json"
     if out.exists():
-        print(f"SKIP {out.name}", flush=True)
-        return
+        if _is_current(json.loads(out.read_text())):
+            print(f"SKIP {out.name}", flush=True)
+            return
+        sys.exit(f"{out} was made before the 2026-10-16 translation fix; "
+                 f"move {VAL_DIR} away, then rerun")
     base = _base()
     w = epoch_weight(epoch)
     device = "cuda"
@@ -421,9 +481,10 @@ def cmd_val(epoch, seq, official_loop):
         order = np.argsort(dist)
         m = _depth(len(cand))
         top = order[:m]
+        qfeat = query_features(base, model, z["packed"][qi:qi + 1], device)
         if len(xcheck) < N_XCHECK and m >= 2 * BATCH:
-            xcheck.append(xcheck_translation(base, bts, bts[qi:qi + 1], cand[top], ang[top]))
-        errs = translation_branch(base, bts, bts[qi:qi + 1], cand[top], ang[top], official_loop)
+            xcheck.append(xcheck_translation(base, trans_cnn, bts, qfeat, cand[top], ang[top]))
+        errs = translation_branch(base, trans_cnn, bts, qfeat, cand[top], ang[top], official_loop)
         order[:m] = top[np.argsort(errs)]
         return cand[order]
 
@@ -438,6 +499,7 @@ def cmd_val(epoch, seq, official_loop):
         "retrieval": f"exhaustive rotation ranking -> translation rerank of top {N_RERANK}",
         "translation_errors": "solve_translation loop" if official_loop else "trans_errors_exact",
         "translation_xcheck": xcheck,
+        "query_translation_path": TRANS_QUERY_PATH,
         "protocol": "revisit<5m, |i-j|>30, intra-sequence (baselines/eval_utils), GT keyframes",
         "bev_bounds": list(rol.ringsharp_bounds(s)),
         "timing": {"feature_s": round(t_feat, 1), "retrieval_s": round(t_ret, 1),
@@ -518,13 +580,16 @@ def cmd_val_watch(exit_file, epochs, poll, min_age, log_dir, max_tries=2):
 def cmd_select(epochs):
     from _pdv2_c3 import _family_pooled
     if SEL.exists():
-        print(f"{SEL} exists; frozen", flush=True)
-        return
+        if _is_current(json.loads(SEL.read_text())):
+            print(f"{SEL} exists; frozen", flush=True)
+            return
+        sys.exit(f"{SEL} was made before the 2026-10-16 translation fix; move it away")
     table = {}
     for e in epochs:
         per = {}
         for s, q in VAL:
             d = json.loads((VAL_DIR / f"val_e{e}_{s}_{q}.json").read_text())
+            assert _is_current(d), f"pre-fix validation result: val_e{e}_{s}_{q}.json"
             per[f"{s}/{q}"] = {"recall@1": d["recall@1"], "n_queries": d["n_queries"]}
         table[f"e{e}"] = {"family_macro_r1": _family_pooled(per), "per_seq": per}
         print(f"e{e}: family-macro R@1 {table[f'e{e}']['family_macro_r1']:.4f}", flush=True)
@@ -539,6 +604,7 @@ def cmd_select(epochs):
                  "no selection rule (it keeps every epoch and *_final = last)."),
         "selected_epoch": best, "selected_weight": str(w), "weight_sha256": _sha_file(w),
         "official_final_epoch": f"e{EPOCHS}",
+        "query_translation_path": TRANS_QUERY_PATH,
         "epochs": table, **_seed_meta()}, indent=2))
     print(f"selected {best}: {w.name}", flush=True)
 
@@ -580,6 +646,7 @@ def ledger(n, positions, min_past, rerank_top1):
 
 def selected_weight():
     sel = json.loads(SEL.read_text())
+    assert _is_current(sel), f"{SEL} predates the 2026-10-16 translation fix"
     p = Path(sel["selected_weight"])
     if not p.exists():
         p = REPO / sel["selected_weight"].split("/Neural-Spectral-Codec/", 1)[1]
@@ -593,8 +660,11 @@ def cmd_dump(cond, seq, official_loop, overwrite):
     out_dir = OUT / cond
     out = out_dir / f"dump_ringsharp_{s}_{q}.npz"
     if out.exists() and not overwrite:
-        print(f"SKIP {out.name}", flush=True)
-        return
+        if _is_current(json.loads(str(np.load(out)["meta"]))):
+            print(f"SKIP {out.name}", flush=True)
+            return
+        sys.exit(f"{out} was made before the 2026-10-16 translation fix; "
+                 f"move the old ledgers away (or pass --overwrite)")
     base = _base()
     w, sel = selected_weight()
     device = "cuda"
@@ -605,10 +675,12 @@ def cmd_dump(cond, seq, official_loop, overwrite):
     min_past = rol.min_past_dists(positions, MIN_INDEX_GAP)
     loader = rol.make_loader(s, q)
     t0 = time.time()
+    packed = []
     _, specs, bts = features(base, model, trans_cnn,
-                             bev_batches_from_loader(base, loader, scan_ids,
-                                                     rol.ringsharp_bounds(s)),
+                             tee_packed(bev_batches_from_loader(base, loader, scan_ids,
+                                                                rol.ringsharp_bounds(s)), packed),
                              len(scan_ids), device)
+    packed = np.concatenate(packed)
     t_feat = time.time() - t0
     del loader
     specs, bts = specs.to(device), bts.to(device)
@@ -622,10 +694,11 @@ def cmd_dump(cond, seq, official_loop, overwrite):
         order = np.argsort(dist)                       # official: np.argsort
         m = _depth(npf)
         top = order[:m]
+        qfeat = query_features(base, model, packed[t:t + 1], device)
         if t in xq:
-            xcheck.append({"t": t, **xcheck_translation(base, bts, bts[t:t + 1],
+            xcheck.append({"t": t, **xcheck_translation(base, trans_cnn, bts, qfeat,
                                                         cand[top], ang[top])})
-        errs = translation_branch(base, bts, bts[t:t + 1], cand[top], ang[top], official_loop)
+        errs = translation_branch(base, trans_cnn, bts, qfeat, cand[top], ang[top], official_loop)
         i = int(np.argmin(errs))
         return {"j": int(top[i]), "err": float(errs[i]), "rot_of_j": float(dist[top[i]]),
                 "j_rot": int(order[0]), "rot_min": float(dist[order[0]]), "n_trans": m}
@@ -643,6 +716,7 @@ def cmd_dump(cond, seq, official_loop, overwrite):
                       "branch re-orders the first min(1000, |prefix|)"),
         "translation_errors": "solve_translation loop" if official_loop else "trans_errors_exact",
         "translation_xcheck": xcheck,
+        "query_translation_path": TRANS_QUERY_PATH,
         "score_direction": {
             "score_trans": "PRIMARY: -translation error of the emitted top-1 (j_star)",
             "score_rot": "-(1 - rotation score) of the same emitted top-1",
@@ -689,6 +763,8 @@ def cmd_check():
         worst = max(worst, float((e_off - e_vec).abs().max()))
         assert torch.equal(e_off, e_vec) or worst < 1e-6, worst
     rep["trans_errors_exact_vs_solve_translation_cpu"] = {"max_abs_diff": worst}
+    # 1b. query path of the translation branch = official order
+    rep["translation_query_path"] = _check_query_path(base)
     print("  translation", rep["trans_errors_exact_vs_solve_translation_cpu"], flush=True)
     # 2. ledger schema vs the existing split-v2 RING#-L ledger
     rng = np.random.default_rng(0)
@@ -755,6 +831,44 @@ def _vox_reference(pts, bounds, Z=20, Y=160, X=160):
     occ[idx[:, 2], idx[:, 1], idx[:, 0]] = 1
     occ[0, 0, 0] = 0
     return occ.transpose(0, 2, 1)
+
+
+def _check_query_path(base):
+    """translation_branch == evaluate_ours_gl.py:252-262 written out
+    (trans_cnn applied to the ROTATED query features), and != the pre-fix
+    order rotate(trans_cnn(features)).  CPU: the official rotate_bev_batch
+    hard-codes .cuda(), so Tensor.cuda is a no-op inside this check only."""
+    import torch
+    from glnet.models.backbones_2d.unet import last_conv_block
+    torch.manual_seed(0)
+    tc = last_conv_block(4, 4, bn=False).eval()
+    qfeat, maps = torch.rand(1, 4, 160, 160), torch.rand(9, 4, 160, 160)
+    ang = (np.array([3, 3, 17, -40, 3, 79, -80, 17, 0]) * 2 * np.pi / 160).astype(np.float32)
+    cand = np.arange(9)
+    orig = torch.Tensor.cuda
+    torch.Tensor.cuda = lambda self, *a, **k: self
+    try:
+        with torch.no_grad():
+            bts = tc(maps)
+            ours = translation_branch(base, tc, bts, qfeat, cand, ang, False)
+            ours_nd = translation_branch(base, tc, bts, qfeat, cand, ang, False, dedup=False)
+
+            def official(q):  # q: rotated query maps fed to solve_translation
+                return base.solve_translation(q, bts)[2].numpy().reshape(-1)
+            rot = lambda f, a: base.rotate_bev_batch(f, torch.tensor(a, dtype=torch.float))  # noqa: E731
+            ref = np.minimum(official(tc(rot(qfeat, ang))), official(tc(rot(qfeat, ang - np.pi))))
+            qb = tc(qfeat)
+            old = np.minimum(official(rot(qb, ang)), official(rot(qb, ang - np.pi)))
+    finally:
+        torch.Tensor.cuda = orig
+    out = {"max_abs_diff_vs_official_order": float(np.abs(ours - ref).max()),
+           "max_abs_diff_dedup_vs_per_candidate": float(np.abs(ours - ours_nd).max()),
+           "max_abs_diff_vs_pre_fix_order": float(np.abs(old - ref).max())}
+    print("  translation query path", out, flush=True)
+    assert out["max_abs_diff_vs_official_order"] < 1e-6, out
+    assert out["max_abs_diff_dedup_vs_per_candidate"] < 1e-6, out
+    assert out["max_abs_diff_vs_pre_fix_order"] > 1e-4, out
+    return out
 
 
 def _check_band(base):
