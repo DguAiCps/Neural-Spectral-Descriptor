@@ -357,10 +357,11 @@ ORIGIN_ONLY[0] = 0x80                        # packed row with only cell (0, 0, 
 
 def polar_agrees(img: np.ndarray, ref: np.ndarray):
     """CUDA image vs CPU transcription: (ok, differing cells).  A few cells
-    may differ at float32 sector / ring edges; a failed CUDA call differs in
-    (almost) every occupied cell."""
+    may differ at float32 sector / ring edges (up to 4 on HeLiPR test scans,
+    each with a point within 1e-5 cell of an edge; 2026-10-18); a failed CUDA
+    call differs in (almost) every occupied cell."""
     nd = int((img != ref).sum())
-    return nd <= max(2, int(0.005 * ref.sum())), nd
+    return nd <= max(8, int(0.005 * ref.sum())), nd
 
 
 def origin_only_rows(bits, nhits, chunk: int = 4096) -> int:
