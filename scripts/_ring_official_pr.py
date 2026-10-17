@@ -124,6 +124,8 @@ def cmd_bev(cond, seq):
                     occ[k] = core.generate_bev_occ(pc_norm).cpu().numpy()
                 if len(pc_norm) >= MIN_FEAT_POINTS:
                     feat[k] = core.generate_bev_feats(pc_norm).cpu().numpy()
+            # silent-CUDA-failure guard: exact CPU transcription + feature support
+            rol.check_bev(occ[k], pc_norm, feat[k] if len(pc_norm) >= MIN_FEAT_POINTS else None)
         tmp = d / f".tmp_shard_{c0:06d}.npz"
         np.savez_compressed(tmp, scan_ids=scan_ids[c0:c1], bev_ring=occ,
                             bev_ringpp=feat, n_points=n_pts)
@@ -157,6 +159,14 @@ def bev_shards(cond, sensor, seq, variant, scan_ids):
     def gen():
         for c0 in range(0, len(scan_ids), SHARD):
             with np.load(d / f"shard_{c0:06d}.npz") as z:
+                bad = rol.degenerate_rows(z["bev_ring"], z["n_points"])
+                if len(bad):
+                    raise RuntimeError(f"{d}/shard_{c0:06d}.npz: {len(bad)} degenerate occupancy rows "
+                                       f"(first {c0 + int(bad[0])}); rebuild this BEV cache")
+                if variant == "ringpp":
+                    for k in range(len(z["bev_ring"])):
+                        if z["n_points"][k] >= MIN_FEAT_POINTS:
+                            rol.check_feat_bev(z["bev_ringpp"][k], z["bev_ring"][k, 0])
                 yield z[f"bev_{variant}"]
     return info, gen()
 
@@ -447,11 +457,36 @@ def _check_timing(rep):
     rep["cpu_timing_ringpp_features"] = tim
 
 
+def _check_bev_guard(rep):
+    """check_bev / degenerate_rows reject the silent-CUDA-failure outputs
+    (all points in cell (0, 0); empty feature map) and pass healthy ones."""
+    scan_ids, _ = rol.load_keyframes(rol.split_cache("odom", "test", "kitti", "07"))
+    _, pcn = rol.official_points("kitti", rol.make_loader("kitti", "07")[int(scan_ids[0])]["points"])
+    good = rol.occupancy_numpy(pcn)
+    dead = np.zeros_like(good); dead[0, 0] = 1                        # every point in cell (0, 0)
+    feat_ok = np.where(good[None].astype(bool), 0.5, 0.0).repeat(6, 0).astype(np.float32)
+    out = {}
+    rol.check_bev(good, pcn, feat_ok); out["healthy_passes"] = True
+    for name, args in (("dead_occupancy", (dead, pcn, None)),
+                       ("zero_features", (good, pcn, np.zeros_like(feat_ok)))):
+        try:
+            rol.check_bev(*args); out[name + "_rejected"] = False
+        except RuntimeError:
+            out[name + "_rejected"] = True
+    stack = np.stack([good, dead, np.zeros_like(good)])[:, None]
+    out["degenerate_rows"] = rol.degenerate_rows(stack, [len(pcn), len(pcn), len(pcn)]).tolist()
+    print("  bev guard", out, flush=True)
+    assert out["healthy_passes"] and out["dead_occupancy_rejected"] and out["zero_features_rejected"]
+    assert out["degenerate_rows"] == [1, 2]
+    rep["bev_guard"] = out
+
+
 def cmd_check():
     rep = {"_meta": {"date": time.strftime("%Y-%m-%d %H:%M"),
                      "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
                      "dataset_table": rol.DATASET_TABLE}}
-    for f in (_check_preprocessing, _check_scorer, _check_ledger_schema, _check_timing):
+    for f in (_check_bev_guard, _check_preprocessing, _check_scorer, _check_ledger_schema,
+              _check_timing):
         print(f"[check] {f.__name__}", flush=True)
         f(rep)
     p = rol.OUT_ROOT / "check_ring_official_cpu.json"

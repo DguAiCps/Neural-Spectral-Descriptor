@@ -207,18 +207,61 @@ def occupancy_numpy(pc_norm: np.ndarray, n: int = 120) -> np.ndarray:
     retreive with max_length = max_height = 1, num_height = 1) so the BEV
     effect of point differences can be measured without a GPU.  Production
     BEVs come from utils.core.generate_bev_occ."""
+    # kernel.cu arithmetic: x, y and gap_x are float, but `(x + 1.0) / gap_x`
+    # uses the double literal 1.0, so the sum and the division are double
+    # (gap_x = 2.0 * (float)max_length / (float)num_x is computed in double
+    # and stored as float).  Matters for points exactly on a cell edge
+    # (e.g. NCLT's 5 mm raw grid).
     p = np.asarray(pc_norm, dtype=np.float32).copy()
     for c in range(3):
         v = p[:, c]
-        v[v == 0.0] = 0.0001
-        v[v > 1.0] = 0.9999
-        v[v < -1.0] = -0.9999
-    gap = np.float32(2.0) / np.float32(n)
-    ix = np.floor((p[:, 0] + np.float32(1.0)) / gap).astype(np.int64)
-    iy = np.floor((p[:, 1] + np.float32(1.0)) / gap).astype(np.int64)
+        v[v == 0.0] = np.float32(0.0001)
+        v[v > 1.0] = np.float32(0.9999)
+        v[v < -1.0] = np.float32(-0.9999)
+    gap = np.float64(np.float32(2.0 * 1.0 / n))
+    ix = np.floor((p[:, 0].astype(np.float64) + 1.0) / gap).astype(np.int64)
+    iy = np.floor((p[:, 1].astype(np.float64) + 1.0) / gap).astype(np.int64)
     bev = np.zeros((n, n), dtype=np.uint8)
     bev[ix, iy] = 1
     return bev
+
+
+def check_bev(occ, pc_norm, feat=None):
+    """Guard against silently failed CUDA kernels (the RING repo's voxelocc /
+    voxelfeat never check CUDA errors; on a dead GPU every point lands in
+    cell (0, 0) or the map stays zero, cf. DiSCO commit b40ffdb).
+    occ must equal the CPU transcription of the same kernel for these points;
+    a RING++ feature BEV must be finite, sit on occupied cells only and cover
+    at least half of them.  Raises RuntimeError."""
+    ref = occupancy_numpy(pc_norm) if len(pc_norm) else np.zeros((120, 120), np.uint8)
+    o = np.asarray(occ).reshape(120, 120)
+    if not np.array_equal(o.astype(np.uint8), ref):
+        raise RuntimeError(f"occupancy BEV != CPU transcription ({int(o.sum())} vs {int(ref.sum())} "
+                           "cells): silent CUDA failure?")
+    if feat is not None:
+        check_feat_bev(feat, ref)
+
+
+def check_feat_bev(feat, occ):
+    f, o = np.asarray(feat), np.asarray(occ).reshape(120, 120).astype(bool)
+    if not np.isfinite(f).all():
+        raise RuntimeError("RING++ feature BEV has non-finite values")
+    nz = (f != 0).any(0)
+    if (nz & ~o).any() or (o.sum() >= 10 and nz.sum() < 0.5 * o.sum()):
+        raise RuntimeError(f"RING++ feature BEV covers {int(nz.sum())} of {int(o.sum())} occupied "
+                           "cells (or cells outside them): silent CUDA failure?")
+
+
+def degenerate_rows(occ, n_points=None):
+    """Indices of stored occupancy rows that look like a failed kernel: a
+    single occupied cell at (0, 0), or an empty map although points were
+    present (n_points > 0, when recorded)."""
+    o = np.asarray(occ).reshape(len(occ), 120, 120).astype(bool)
+    c = o.reshape(len(o), -1).sum(1)
+    bad = (c == 1) & o[:, 0, 0]
+    if n_points is not None:
+        bad |= (c == 0) & (np.asarray(n_points) > 0)
+    return np.flatnonzero(bad)
 
 
 def make_loader(sensor: str, seq: str):

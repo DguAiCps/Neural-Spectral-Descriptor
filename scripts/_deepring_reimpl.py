@@ -154,6 +154,7 @@ def occupancy_bev(core, sensor, pts, backend):
         import torch
         with torch.no_grad():
             occ = core.generate_bev_occ(pcn).cpu().numpy().reshape(120, 120)
+        rol.check_bev(occ, pcn)        # silent-CUDA-failure guard (exact CPU transcription)
     else:
         occ = rol.occupancy_numpy(pcn)
     assert np.isin(occ, (0, 1)).all(), "occupancy BEV is not binary"
@@ -264,7 +265,11 @@ def load_bev(role, sensor, q, root=BEV_ROOT, limit=0):
             ids.append(z["scan_ids"])
             packed.append(z["bev_packed"])
     assert np.array_equal(np.concatenate(ids), scan_ids)
-    return np.concatenate(packed), info
+    packed = np.concatenate(packed)
+    for c0 in range(0, len(packed), 2000):     # refuse rows from a silently failed kernel
+        bad = rol.degenerate_rows(np.unpackbits(packed[c0:c0 + 2000], axis=-1, count=120))
+        assert not len(bad), f"{d}: degenerate occupancy row {c0 + int(bad[0])}; rebuild this BEV cache"
+    return packed, info
 
 
 def unpack(packed_rows):
