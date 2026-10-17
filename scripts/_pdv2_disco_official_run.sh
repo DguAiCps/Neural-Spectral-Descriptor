@@ -30,6 +30,12 @@
 # and shares the polar input stores.  TRAIN_NEEDS_TEST=0 lets `train` start
 # once the train and val stores are complete (default 1: all stores).
 #   paths     print the resolved locations for this SEED
+#   verify    integrity of every complete polar store (failed-CUDA signature
+#             rows + 16 rows per store recomputed on CPU); read-only, exits 1 on
+#             failure.  VERIFY_RESET=1 moves failing stores aside and marks them
+#             incomplete so that `prep` regenerates them.  `gen` itself now
+#             compares every CUDA image with the CPU transcription and aborts
+#             on disagreement (the extension ignores CUDA errors).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PYTHONDONTWRITEBYTECODE=1
@@ -118,6 +124,16 @@ stage_dump() {
   say dump
   $D dump >> "$LOG/dump.log" 2>&1
   tail -1 "$LOG/dump.log"
+}
+
+stage_verify() {
+  say verify
+  if [ "${VERIFY_RESET:-0}" = 1 ]; then
+    $P verify --reset > "$LOG/verify_reset.log" 2>&1; tail -1 "$LOG/verify_reset.log"
+  else
+    $P verify > "$LOG/verify.log" 2>&1 || { tail -1 "$LOG/verify.log"; exit 1; }
+    tail -1 "$LOG/verify.log"
+  fi
 }
 
 stage_paths() {

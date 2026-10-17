@@ -340,6 +340,39 @@ def unpack(row: np.ndarray) -> np.ndarray:
     return np.unpackbits(row).reshape(SHAPE).astype(np.float32)
 
 
+# ------------------------------------------------------------ integrity guards
+# The official extension (manager.cu) checks no CUDA error: when the GPU cannot
+# serve the process (e.g. memory taken by other jobs) cudaMalloc / memcpy /
+# the kernel fail silently, the host index arrays stay 0 and EVERY point lands
+# in cell (0, 0, 0).  This happened on cps2 on 2026-10-12 for 37 test stores
+# (logs/baseline_official_20261011/disco.md section 12).  Guards:
+#   * gen: every CUDA image is compared with the CPU transcription of the same
+#     kernel (~0.2 ms/scan; gpu-check found 0 differing cells) and the job
+#     aborts on disagreement;
+#   * load_store: refuses stores with failure-signature rows;
+#   * verify: signature scan + sampled recomputation from the raw points.
+ORIGIN_ONLY = np.zeros(NBYTES, np.uint8)
+ORIGIN_ONLY[0] = 0x80                        # packed row with only cell (0, 0, 0)
+
+
+def polar_agrees(img: np.ndarray, ref: np.ndarray):
+    """CUDA image vs CPU transcription: (ok, differing cells).  A few cells
+    may differ at float32 sector / ring edges; a failed CUDA call differs in
+    (almost) every occupied cell."""
+    nd = int((img != ref).sum())
+    return nd <= max(2, int(0.005 * ref.sum())), nd
+
+
+def origin_only_rows(bits, nhits, chunk: int = 4096) -> int:
+    """Rows with only cell (0, 0, 0) set although the scan kept > 1 point
+    (failure signature of the extension)."""
+    n = 0
+    for i0 in range(0, len(bits), chunk):
+        b = np.asarray(bits[i0:i0 + chunk])
+        n += int(((b == ORIGIN_ONLY).all(axis=1) & (nhits[i0:i0 + chunk] > 1)).sum())
+    return n
+
+
 # ------------------------------------------------------------ CPU transcription
 def polar_numpy(pc_flat: np.ndarray, size: int, enough_large: int = 1) -> np.ndarray:
     """CHECK ONLY: float32 numpy transcription of kernel.cu point2gridmap +
@@ -465,7 +498,14 @@ def cmd_gen(role: str, key: str, flush_every: int = 500):
     done = np.load(done_p) if done_p.exists() else np.zeros(n, dtype=bool)
     nhits = np.load(d / "nhits.npy") if (d / "nhits.npy").exists() else np.full(n, -1, np.int64)
     loader = _make_loader(sensor, seq)
-    t0, new, max_dt = time.time(), 0, 0.0
+    cpu = fake_gputransform_module()
+    t0, new, max_dt, max_nd = time.time(), 0, 0.0, 0
+
+    def flush():
+        bits.flush()
+        np.save(done_p, done)
+        np.save(d / "nhits.npy", nhits)
+
     for i in np.flatnonzero(~done):
         item = loader[int(sids[i])]
         if item.get("pose") is not None:  # loader index space == cache index space
@@ -473,14 +513,22 @@ def cmd_gen(role: str, key: str, flush_every: int = 500):
             max_dt = max(max_dt, dt)
             assert dt < 1e-2, (key, int(sids[i]), dt)
         hits = official_hits(sensor, item["points"])
-        bits[i] = pack(official_polar(hits, gputransform, cfg))
+        img = official_polar(hits, gputransform, cfg)
+        ok, nd = polar_agrees(img, official_polar(hits, cpu, cfg))
+        if not ok:   # keep the verified rows, then stop loudly (resumable)
+            flush()
+            raise RuntimeError(
+                f"{role}/{key} scan {int(sids[i])}: CUDA polar image differs from the CPU "
+                f"transcription in {nd} cells ({int(img.sum())} occupied); the official "
+                "extension does not check CUDA errors (GPU memory taken by other jobs?). "
+                "Nothing stored for this scan; rerun `gen` when the GPU is free.")
+        max_nd = max(max_nd, nd)
+        bits[i] = pack(img)
         nhits[i] = len(hits)
         done[i] = True
         new += 1
         if new % flush_every == 0:
-            bits.flush()
-            np.save(done_p, done)
-            np.save(d / "nhits.npy", nhits)
+            flush()
             print(f"  [{role}/{key}] {int(done.sum())}/{n} "
                   f"({(time.time() - t0) / new * 1e3:.1f} ms/scan)", flush=True)
     bits.flush()
@@ -491,7 +539,9 @@ def cmd_gen(role: str, key: str, flush_every: int = 500):
                  "n_empty": int((nhits == 0).sum()),
                  "hits_median": int(np.median(nhits)),
                  "gputransform_sha256": sha256(Path(gputransform.__file__)),
-                 "max_abs_pose_check_m": max_dt})
+                 "max_abs_pose_check_m": max_dt,
+                 "verified_vs_cpu": "every scan generated in this run",
+                 "max_cells_differ_cpu": max_nd})
     (d / "meta.json").write_text(json.dumps(meta, indent=1))
     done_p.unlink(missing_ok=True)
     print(f"OK gen {role}/{key}: {new} new in {time.time() - t0:.0f} s, "
@@ -531,7 +581,78 @@ def load_store(role: str, sensor: str, seq: str, mmap: bool = True):
         f"{d}: made with another band rule"
     idx = np.load(d / "index.npz")
     bits = np.load(d / "bits.npy", mmap_mode="r" if mmap else None)
+    bad = origin_only_rows(bits, np.load(d / "nhits.npy"))
+    assert bad == 0, (f"{d}: {bad} rows carry the failed-CUDA signature (only cell 0,0,0); "
+                      "run `verify --reset` and regenerate with `gen`")
     return bits, idx, meta
+
+
+def check_store(role: str, sensor: str, seq: str, n_sample: int = 16, loader=None) -> dict:
+    """Integrity of one complete store: failure-signature rows over all rows,
+    and n_sample evenly spaced rows recomputed from the raw points (CPU
+    transcription) -- equal cells (polar_agrees) and equal kept-point counts."""
+    d = store_dir(role, sensor, seq)
+    meta = json.loads((d / "meta.json").read_text())
+    rep = {"store": f"{role}/{sensor}/{seq}", "complete": bool(meta.get("complete"))}
+    if not rep["complete"]:
+        rep["ok"] = False
+        return rep
+    bits = np.load(d / "bits.npy", mmap_mode="r")
+    nhits = np.load(d / "nhits.npy")
+    sids = np.load(d / "index.npz")["scan_ids"]
+    rep["origin_only_rows"] = origin_only_rows(bits, nhits)
+    pick = np.unique(np.linspace(0, len(sids) - 1, n_sample).round().astype(int)) \
+        if n_sample else np.zeros(0, int)
+    bad_rows = []
+    if len(pick):
+        from _pd_build_test_caches import _make_loader
+        loader = loader or _make_loader(sensor, seq)
+        cpu, cfg_ = fake_gputransform_module(), types.SimpleNamespace(
+            max_length=1, max_height=1, num_ring=40, num_sector=120, num_height=20)
+        for i in pick:
+            hits = official_hits(sensor, loader[int(sids[i])]["points"])
+            ok, nd = polar_agrees(unpack(bits[i]), official_polar(hits, cpu, cfg_))
+            if not ok or nhits[i] != len(hits):
+                bad_rows.append({"row": int(i), "cells_differ": nd,
+                                 "nhits": int(nhits[i]), "hits_now": int(len(hits))})
+    rep["sampled"], rep["sampled_bad"] = int(len(pick)), bad_rows
+    rep["ok"] = rep["origin_only_rows"] == 0 and not bad_rows
+    return rep
+
+
+def cmd_verify(roles, n_sample: int, reset: bool) -> bool:
+    """check_store for every complete store of `roles`; --reset moves the
+    bits of failing stores aside (bits.corrupt_<time>.npy) and marks them
+    incomplete so that `gen` / the `prep` stage regenerate them."""
+    all_ok = True
+    for role in roles:
+        for sensor, seq in ROLES[role][0]:
+            d = store_dir(role, sensor, seq)
+            meta = json.loads((d / "meta.json").read_text())
+            if not meta.get("complete"):
+                print(f"  {role}/{sensor}/{seq}: incomplete (not checked)", flush=True)
+                continue
+            r = check_store(role, sensor, seq, n_sample)
+            print(json.dumps(r), flush=True)
+            if r["ok"]:
+                continue
+            all_ok = False
+            if reset:
+                stamp = time.strftime("%Y%m%d_%H%M%S")
+                os.replace(d / "bits.npy", d / f"bits.corrupt_{stamp}.npy")
+                for f in ("nhits.npy", "done.npy"):
+                    (d / f).unlink(missing_ok=True)
+                meta = {k: v for k, v in meta.items() if k not in (
+                    "bits_sha256", "n_empty", "hits_median", "gputransform_sha256",
+                    "max_abs_pose_check_m", "verified_vs_cpu", "max_cells_differ_cpu")}
+                meta.update({"complete": False, "reset": f"{stamp}: verify failed "
+                             f"(origin-only rows {r['origin_only_rows']}, sampled bad "
+                             f"{len(r['sampled_bad'])})"})
+                (d / "meta.json").write_text(json.dumps(meta, indent=1))
+                print(f"  RESET {role}/{sensor}/{seq} -> bits.corrupt_{stamp}.npy", flush=True)
+    print("VERIFY_OK" if all_ok else ("VERIFY_FAILED_RESET" if reset else "VERIFY_FAILED"),
+          flush=True)
+    return all_ok
 
 
 # ------------------------------------------------------------ checks
@@ -621,6 +742,8 @@ def cmd_selftest(n_scans: int, out_json: Path | None):
                 ok &= same and same_img
                 rep["reader"].append(case)
                 print(json.dumps(case), flush=True)
+    rep["guards"] = _guard_check()
+    ok &= rep["guards"]["ok"]
     rep["heading"] = _heading_check()
     ok &= rep["heading"]["consistent"]
     rep["fft"] = _fft_check()
@@ -632,6 +755,86 @@ def cmd_selftest(n_scans: int, out_json: Path | None):
     print("PREP_SELFTEST_OK" if ok else "PREP_SELFTEST_FAILED", flush=True)
     if not ok:
         sys.exit(1)
+
+
+class _FailedCudaTransformer(FakeGPUTransformer):
+    """CHECK ONLY: what the official extension returns when its CUDA calls
+    fail silently -- the host index arrays stay 0, every point in cell 0."""
+
+    def retreive(self):
+        out = np.zeros(40 * 120 * 20 * 3, dtype=np.float32)
+        if self.size:
+            out[2] = 1
+        return out
+
+
+def _guard_check(n: int = 24) -> dict:
+    """Regression for the 2026-10-12 cps2 failure (37 test stores with every
+    point in cell 0,0,0): gen's CUDA-vs-CPU comparison, load_store and
+    verify (--reset) must each catch it.  Uses a temporary store built from
+    real keyframes (test nclt/2013-01-10, geometry only) with the CPU path."""
+    global POLAR
+    from _pd_build_test_caches import _make_loader
+    cfg_ = types.SimpleNamespace(max_length=1, max_height=1, num_ring=40, num_sector=120,
+                                 num_height=20)
+    cpu, failed = fake_gputransform_module(), types.ModuleType("gputransform_failed")
+    failed.GPUTransformer = _FailedCudaTransformer
+    role, sensor, seq = "test_odom", "nclt", "2013-01-10"
+    real = store_dir(role, sensor, seq)
+    idx = np.load(real / "index.npz")
+    sids = idx["scan_ids"][:n]
+    loader = _make_loader(sensor, seq)
+    hits = [official_hits(sensor, loader[int(s)]["points"]) for s in sids]
+    good = [official_polar(h, cpu, cfg_) for h in hits]
+    bad = [official_polar(h, failed, cfg_) for h in hits]
+    rep = {"gen_comparison_catches": all(not polar_agrees(b, g)[0] for b, g in zip(bad, good)),
+           "gen_comparison_accepts_good": all(polar_agrees(g, g)[0] for g in good)}
+    old_polar = POLAR
+    with tempfile.TemporaryDirectory() as td:
+        try:
+            POLAR = Path(td)
+            d = store_dir(role, sensor, seq)
+            d.mkdir(parents=True)
+            np.savez(d / "index.npz", scan_ids=sids, poses=idx["poses"][:n])
+            meta = json.loads((real / "meta.json").read_text())
+            meta.update({"n_frames": n, "complete": True})
+            (d / "meta.json").write_text(json.dumps(meta))
+            np.save(d / "nhits.npy", np.array([len(h) for h in hits]))
+            np.save(d / "bits.npy", np.stack([pack(g) for g in good]))
+            rep["good_store_ok"] = check_store(role, sensor, seq, 6, loader)["ok"]
+            load_store(role, sensor, seq)
+            np.save(d / "bits.npy", np.stack([pack(b) for b in bad]))
+            r = check_store(role, sensor, seq, 6, loader)
+            rep["failed_store_flagged"] = not r["ok"] and r["origin_only_rows"] == n
+            try:
+                load_store(role, sensor, seq)
+                rep["load_store_refuses"] = False
+            except AssertionError:
+                rep["load_store_refuses"] = True
+            rows = np.stack([pack(g) for g in good])
+            rows[n // 2] = pack(np.roll(good[n // 2], 7, axis=2))   # other corruption
+            np.save(d / "bits.npy", rows)
+            r = check_store(role, sensor, seq, n, loader)
+            rep["sampled_recompute_flags_other_corruption"] = (
+                not r["ok"] and [b["row"] for b in r["sampled_bad"]] == [n // 2])
+            np.save(d / "bits.npy", np.stack([pack(b) for b in bad]))
+            saved = dict(ROLES)
+            try:                       # verify --reset on this temporary store only
+                ROLES.clear()
+                ROLES[role] = ([(sensor, seq)],) + saved[role][1:]
+                res = cmd_verify([role], 4, reset=True)
+            finally:
+                ROLES.clear()
+                ROLES.update(saved)
+            m2 = json.loads((d / "meta.json").read_text())
+            rep["verify_reset"] = (not res and not m2["complete"]
+                                   and not (d / "bits.npy").exists()
+                                   and any(d.glob("bits.corrupt_*.npy")))
+        finally:
+            POLAR = old_polar
+    rep["ok"] = all(v for k, v in rep.items())
+    print(f"  guards: {rep}", flush=True)
+    return rep
 
 
 def _heading_check(max_pairs: int = 40):
@@ -759,6 +962,11 @@ def main():
     p.add_argument("--seq", required=True)
     p = sub.add_parser("status")
     p.add_argument("--role", choices=tuple(ROLES), nargs="+", default=list(ROLES))
+    p = sub.add_parser("verify")
+    p.add_argument("--role", choices=tuple(ROLES), nargs="+", default=list(ROLES))
+    p.add_argument("--n-sample", type=int, default=16, help="rows recomputed per store")
+    p.add_argument("--reset", action="store_true",
+                   help="move failing stores' bits aside and mark them incomplete")
     p = sub.add_parser("selftest")
     p.add_argument("--n-scans", type=int, default=2)
     p.add_argument("--out-json", type=Path, default=None)
@@ -775,6 +983,8 @@ def main():
         cmd_gen(a.role, a.seq)
     elif a.cmd == "status":
         sys.exit(0 if cmd_status(a.role) else 1)
+    elif a.cmd == "verify":
+        sys.exit(0 if cmd_verify(a.role, a.n_sample, a.reset) or a.reset else 1)
     elif a.cmd == "selftest":
         cmd_selftest(a.n_scans, a.out_json)
     elif a.cmd == "gpu-check":

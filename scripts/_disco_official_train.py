@@ -328,6 +328,11 @@ def train(args, official_argv):
     from tensorboardX import SummaryWriter
     from _pdv2_c3 import _family_pooled
 
+    from _disco_official_prep import check_store
+    for role, seqs in (("train", TRAIN), ("val", VAL)):           # input integrity
+        for s, q in seqs:
+            r = check_store(role, s, q, n_sample=4)
+            assert r["ok"], f"polar store failed verification: {r}"
     bank = PolarBank()
     lp.load_pc_file = bank.load                                   # replacement 2
     queries, sizes = build_train(bank, args.smoke)                # replacement 1

@@ -98,6 +98,17 @@ def ledger(desc: np.ndarray, positions: np.ndarray) -> dict:
             "n_candidates": n_cand}
 
 
+def assert_descriptors_distinct(desc, name, min_fraction=0.5):
+    """Guard against degenerate inputs (e.g. failed CUDA polar images, which
+    made every descriptor of a sequence identical on 2026-10-12): at least
+    `min_fraction` of the keyframes must have distinct descriptors."""
+    n_distinct = len(np.unique(np.round(desc, 6), axis=0))
+    frac = n_distinct / max(len(desc), 1)
+    assert frac >= min_fraction, (f"{name}: only {n_distinct}/{len(desc)} distinct descriptors "
+                                  "-- degenerate inputs; run the prep `verify`")
+    return frac
+
+
 def _l2_check(desc, arrays, n=50):
     """Official retrieval structure (sklearn KDTree, Euclidean) on the prefix."""
     from sklearn.neighbors import KDTree
@@ -150,6 +161,7 @@ def encode_and_dump(EV, model, bank, sensor, q, out_path, checkpoint, chosen,
     t0 = time.time()
     desc = descriptors(EV, model, bank, "test_odom", sensor, q, n)   # official inference
     t_enc = time.time() - t0
+    distinct = assert_descriptors_distinct(desc, f"{sensor}/{q}")
     t0 = time.time()
     arrays = ledger(desc, poses_gt[:n, :3, 3])
     t_led = time.time() - t0
@@ -172,6 +184,7 @@ def encode_and_dump(EV, model, bank, sensor, q, out_path, checkpoint, chosen,
                           "Euclidean)"},
         "descriptor_norm": {"min": float(norms.min()), "max": float(norms.max()),
                             "median": float(np.median(norms))},
+        "descriptor_distinct_fraction": round(float(distinct), 4),
         "l2_check": l2,
         "official": {"repo": OFFICIAL_REPO, "commit": OFFICIAL_COMMIT,
                      "code": "models/DiSCO.py, evaluate.py evaluate() loading and "
@@ -228,6 +241,9 @@ def cmd_dump(seqs, checkpoint, use, worker, overwrite):
         from _disco_official_train import PolarBank
         assert len(todo) == 1
         sensor, q = todo[0].split("/")
+        from _disco_official_prep import check_store
+        r = check_store("test_odom", sensor, q, n_sample=16)       # input integrity
+        assert r["ok"], f"polar store failed verification: {r}"
         cfg, lp, EV, model = official_model(checkpoint)
         bank = PolarBank()
         lp.load_pc_file = bank.load
@@ -295,6 +311,12 @@ def cmd_selftest():
             assert x == y or (np.isnan(x) and np.isnan(y)), (t, k)
     chk = _l2_check(desc, a)
     assert chk["kdtree_top1_equals_j_star"] == chk["n_checked"], chk
+    assert assert_descriptors_distinct(desc, "synthetic") > 0.9
+    try:                      # the 2026-10-12 failure: identical descriptors
+        assert_descriptors_distinct(np.tile(desc[:1], (n, 1)), "degenerate")
+        raise RuntimeError("degenerate descriptors were not refused")
+    except AssertionError:
+        pass
     print(f"SELFTEST_OK: L2 ledger causal, exact, prefix-invariant; KDTree {chk}", flush=True)
 
 
