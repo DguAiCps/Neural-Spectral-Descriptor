@@ -190,6 +190,7 @@ def compute_recall_cosine_then_rerank(
     skip_frames: int = 30,
     n_coarse: int = 200,
     per_query_records: Optional[List[dict]] = None,
+    query_stride: int = 1,
 ) -> Tuple[Dict[int, float], int]:
     """
     Two-stage retrieval: cosine FAISS pre-filter → method-specific rerank.
@@ -205,6 +206,8 @@ def compute_recall_cosine_then_rerank(
             compute_recall_multi_k.
         n_coarse: how many candidates to pull from the cosine pre-filter
                   before reranking.
+        query_stride: keep every query_stride-th revisit query in time order
+                  (1 = all, the default); the database is unchanged.
 
     Returns:
         ({k: recall}, n_queries)
@@ -213,6 +216,7 @@ def compute_recall_cosine_then_rerank(
 
     positions = poses[:, :3, 3].astype(np.float64)
     queries = _find_revisit_queries(positions, distance_threshold, skip_frames)
+    queries = queries[::max(int(query_stride), 1)]
     if len(queries) == 0:
         return {k: 0.0 for k in k_values}, 0
 

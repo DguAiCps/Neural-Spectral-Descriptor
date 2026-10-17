@@ -407,6 +407,12 @@ def query_features(base, model, packed_row, device):
                       "img": None})["bev"]
 
 
+# Validation keeps every VAL_QUERY_STRIDE-th revisit query (time order; the database is
+# unchanged). 4 since 2026-10-17 (user decision): the fixed translation re-rank made a full
+# validation pass take 7-8 h per epoch; selection still covers all 30 epochs.
+VAL_QUERY_STRIDE = int(os.environ.get("VAL_QUERY_STRIDE", "4"))
+
+
 def _is_current(meta: dict) -> bool:
     return meta.get("query_translation_path") == TRANS_QUERY_PATH
 
@@ -490,7 +496,7 @@ def cmd_val(epoch, seq, official_loop):
 
     t0 = time.time()
     recalls, n_q = compute_recall_cosine_then_rerank(
-        g, rerank_fn, poses, k_values=[1, 5, 10], n_coarse=len(g))
+        g, rerank_fn, poses, k_values=[1, 5, 10], n_coarse=len(g), query_stride=VAL_QUERY_STRIDE)
     t_ret = time.time() - t0
     out.write_text(json.dumps({
         "sensor": s, "sequence": q, "epoch": epoch, "n_frames": len(scan_ids),
@@ -500,6 +506,7 @@ def cmd_val(epoch, seq, official_loop):
         "translation_errors": "solve_translation loop" if official_loop else "trans_errors_exact",
         "translation_xcheck": xcheck,
         "query_translation_path": TRANS_QUERY_PATH,
+        "val_query_stride": VAL_QUERY_STRIDE,
         "protocol": "revisit<5m, |i-j|>30, intra-sequence (baselines/eval_utils), GT keyframes",
         "bev_bounds": list(rol.ringsharp_bounds(s)),
         "timing": {"feature_s": round(t_feat, 1), "retrieval_s": round(t_ret, 1),
@@ -590,6 +597,8 @@ def cmd_select(epochs):
         for s, q in VAL:
             d = json.loads((VAL_DIR / f"val_e{e}_{s}_{q}.json").read_text())
             assert _is_current(d), f"pre-fix validation result: val_e{e}_{s}_{q}.json"
+            assert d.get("val_query_stride", 1) == VAL_QUERY_STRIDE, \
+                f"val_e{e}_{s}_{q}.json used query stride {d.get('val_query_stride', 1)}, not {VAL_QUERY_STRIDE}"
             per[f"{s}/{q}"] = {"recall@1": d["recall@1"], "n_queries": d["n_queries"]}
         table[f"e{e}"] = {"family_macro_r1": _family_pooled(per), "per_seq": per}
         print(f"e{e}: family-macro R@1 {table[f'e{e}']['family_macro_r1']:.4f}", flush=True)
@@ -598,13 +607,14 @@ def cmd_select(epochs):
     SEL.write_text(json.dumps({
         "rule": ("highest split-v2 validation family-macro 5 m R@1 (queries "
                  "pooled within a sensor family, families weighted equally) "
-                 f"over epochs {epochs[0]}-{epochs[-1]}, official retrieval depth "
+                 f"over epochs {epochs[0]}-{epochs[-1]} on every {VAL_QUERY_STRIDE}-th revisit query, "
+                 "official retrieval depth "
                  "(exhaustive rotation ranking -> translation rerank of top "
                  f"{N_RERANK}, README); ties -> earlier epoch. The official trainer has "
                  "no selection rule (it keeps every epoch and *_final = last)."),
         "selected_epoch": best, "selected_weight": str(w), "weight_sha256": _sha_file(w),
         "official_final_epoch": f"e{EPOCHS}",
-        "query_translation_path": TRANS_QUERY_PATH,
+        "query_translation_path": TRANS_QUERY_PATH, "val_query_stride": VAL_QUERY_STRIDE,
         "epochs": table, **_seed_meta()}, indent=2))
     print(f"selected {best}: {w.name}", flush=True)
 
