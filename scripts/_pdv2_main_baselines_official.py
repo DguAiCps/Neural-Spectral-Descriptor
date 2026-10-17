@@ -45,6 +45,11 @@ METHODS = (
     # 주표는 공식 가운데 정렬 창(2026-10-14 사용자 결정), 보고 거리는 공식 L2
     ("seqot", "results/pdv2_seqot_official_centered/odom", "dump_seqotl2", "score_l2",
      "pr_summary_baselines.json", "seqotl2"),
+    ("imlpr", "results/pdv2_imlpr_official/odom", "dump_imlpr", "score_cos",
+     "pr_summary_baselines.json", "imlpr"),
+    # 주 점수 score_negl2(공식 검색 거리의 음수); score_cos는 비교용
+    ("bevplace", "results/pdv2_bevplace_official/odom", "dump_bevplace", "score_negl2",
+     "pr_summary_baselines.json", "bevplace"),
 )
 
 
