@@ -64,7 +64,7 @@ def one_replicate(r):
     rng = np.random.default_rng([SEED, r])
     seq_draw = {c: list(rng.choice(names, size=len(names), replace=True)) for c, names in CITY_SEQS.items()}
     idx = {}
-    for name in set(n for v in seq_draw.values() for n in v):     # 같은 시퀀스는 같은 블록 표본을 쓴다
+    for name in sorted(set(n for v in seq_draw.values() for n in v)):   # 같은 시퀀스는 같은 블록 표본; 정렬해 실행마다 같은 난수 순서
         n = len(DATA["_class"][name]["positive"])
         starts = np.arange(0, n, BLOCK)
         pick = rng.choice(starts, size=len(starts), replace=True)
