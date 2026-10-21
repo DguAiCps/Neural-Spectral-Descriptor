@@ -29,13 +29,7 @@ unchanged:
 Written from the paper (no released counterpart):
   eq. 8       C(M1, M2) = max_a sum_theta sum_omega M1(theta + a, omega) M2(theta, omega)
               -- un-normalized, as printed (corr_max; FFT over theta).
-  eq. 9       C~ = Softmax(W C + b), W, b in R  -- nn.Linear(1, 1), started at
-              W = 1, b = 0 (the paper gives no initial values).  The default
-              nn.Linear init draws W from U(-1, 1): with W < 0 a larger
-              correlation lowers the logit, and as W only scales the logits
-              (b cancels in the softmax) Adam barely moves it, so seed 3
-              collapsed (loss ln 24 for 20 epochs) and seed 1 stalled for 10
-              epochs (2026-10-21, user decision).
+  eq. 9       C~ = Softmax(W C + b), W, b in R  -- nn.Linear(1, 1).
   loss        cross entropy over the support classes (Sec. III-C).
   episodes    24 classes x (1 shot + 6 queries); same class = within 10 m,
               different classes = beyond 20 m (Sec. III-D) -> EpisodeSampler.
@@ -61,7 +55,7 @@ N_THETA = N_TAU = 120          # paper: 120 x 120 (RING cfg.num_ring / num_secto
 RECIPE = {"epochs": 20, "episodes_per_epoch": 60, "optimizer": "Adam",
           "lr": 1e-3, "weight_decay": 1e-4, "milestones": [5, 12], "gamma": 0.1,
           "ways": 24, "shots": 1, "queries_per_class": 6,
-          "same_class_m": 10.0, "diff_class_m": 20.0, "fc_init": {"W": 1.0, "b": 0.0}}
+          "same_class_m": 10.0, "diff_class_m": 20.0}
 
 
 def import_unet():
@@ -91,9 +85,6 @@ class DeepRING(nn.Module):
         UNet = import_unet()
         self.unet = UNet(1, bn=False, is_circular=True)
         self.fc = nn.Linear(1, 1)          # W C + b, W, b in R (eq. 9)
-        with torch.no_grad():              # positive start; see the module docstring
-            self.fc.weight.fill_(RECIPE["fc_init"]["W"])
-            self.fc.bias.fill_(RECIPE["fc_init"]["b"])
 
     def embed(self, sino: torch.Tensor) -> torch.Tensor:
         return row_fft_mag(self.unet(sino))
