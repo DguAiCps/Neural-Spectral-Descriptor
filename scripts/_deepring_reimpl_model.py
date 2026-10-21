@@ -37,7 +37,12 @@ unchanged:
               10^2-10^3, an exploding loss, and descriptors collapsing to one
               map (loss ln 24: all 20 epochs of seed 3, 10 of seed 1).
 Written from the paper (no released counterpart):
-  eq. 9       C~ = Softmax(W C + b), W, b in R  -- nn.Linear(1, 1).
+  eq. 9       C~ = Softmax(W C + b), W, b in R  -- nn.Linear(1, 1), started at
+              W = 1, b = 0 (the paper gives no initial values; RING's score is
+              higher for more similar scans, so W > 0 points the classifier the
+              right way).  The default init draws W from U(-1, 1): with the
+              RING score, seed 3 (W = -0.974) still collapsed in its first
+              epoch while seeds 1 and 2 trained (2026-10-21, user decision).
   loss        cross entropy over the support classes (Sec. III-C).
   episodes    24 classes x (1 shot + 6 queries); same class = within 10 m,
               different classes = beyond 20 m (Sec. III-D) -> EpisodeSampler.
@@ -63,7 +68,7 @@ N_THETA = N_TAU = 120          # paper: 120 x 120 (RING cfg.num_ring / num_secto
 RECIPE = {"epochs": 20, "episodes_per_epoch": 60, "optimizer": "Adam",
           "lr": 1e-3, "weight_decay": 1e-4, "milestones": [5, 12], "gamma": 0.1,
           "ways": 24, "shots": 1, "queries_per_class": 6,
-          "same_class_m": 10.0, "diff_class_m": 20.0}
+          "same_class_m": 10.0, "diff_class_m": 20.0, "fc_init": {"W": 1.0, "b": 0.0}}
 
 
 def import_unet():
@@ -93,6 +98,9 @@ class DeepRING(nn.Module):
         UNet = import_unet()
         self.unet = UNet(1, bn=False, is_circular=True)
         self.fc = nn.Linear(1, 1)          # W C + b, W, b in R (eq. 9)
+        with torch.no_grad():              # W = 1, b = 0; see the module docstring
+            self.fc.weight.fill_(RECIPE["fc_init"]["W"])
+            self.fc.bias.fill_(RECIPE["fc_init"]["b"])
 
     def embed(self, sino: torch.Tensor) -> torch.Tensor:
         return row_fft_mag(self.unet(sino))
