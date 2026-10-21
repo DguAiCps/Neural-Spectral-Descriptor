@@ -19,7 +19,8 @@ docstring lists what was checked).  This driver chains:
              weight decay 1e-4, MultiStepLR gamma 0.1 at epochs 5 and 12;
              episodes of 24 classes x (1 shot + 6 queries) inside one training
              sequence; sinogram = RING repo utils.core.generate_RING on the
-             BEV (GPU); M_f = |row DFT(UNet(sinogram))|; eq. 8 correlation;
+             BEV (GPU); M_f = |row DFT(UNet(sinogram))|; eq. 8 correlation as
+             RING's own circorr2 score (scripts/_deepring_reimpl_model.py);
              eq. 9 W C + b; cross entropy.  Seed = env SEED (default 1;
              other seeds: runs/s<SEED>, results/pdv2_deepring_reimpl_s<SEED>).
              Every epoch: split-v2 VAL
@@ -30,7 +31,7 @@ docstring lists what was checked).  This driver chains:
              family-macro R@1, ties -> earlier epoch.  The paper states no
              selection rule; the last epoch (20) is recorded as well.
   dump       46 split-v2 test sequences: per query t >= 30, exhaustive eq. 8
-             over every keyframe j <= t - 30, top-1 = argmax W C + b, written
+             (RING circorr2 score) over every keyframe j <= t - 30, top-1 = argmax W C + b, written
              by scripts/_causal_ring_pr.dump_variant (unchanged, schema
              pr-dump-v1): score_corr = (W C + b) of the top-1 minus 1 (the
              shared writer's constant offset; PR metrics are shift-invariant).
@@ -98,8 +99,8 @@ SHARD = 1000
 EMBED_BATCH = 256
 VAL_RADIUS, VAL_SKIP = 5.0, 30
 NOTE = ("DeepRING (Lu et al., ICRA 2023) paper-based re-implementation: no public "
-        "official code exists; RING repo preprocessing/radon and RINGSharp UNet "
-        "(unchanged) + paper eqs. 7-9 and Sec. III-D recipe")
+        "official code exists; RING repo preprocessing/radon, RINGSharp UNet and RING "
+        "circorr2 score as eq. 8 (unchanged) + paper eqs. 7 and 9 and Sec. III-D recipe")
 
 
 # ------------------------------------------------------------------ helpers
@@ -541,9 +542,9 @@ def load_model(checkpoint, device):
 
 
 def xcheck_scores(bank, t, block):
-    """blocked bank scores == single-query bank scores == eq. 8 written out
-    (corr_max_direct) on up to 256 prefix rows of the same M_f (recovered
-    from the bank by the inverse rfft, so only the scorer is tested)."""
+    """blocked bank scores == single-query bank scores == the RING repo's
+    batch_circorr (corr_max_direct) on up to 256 prefix rows of the same raw
+    M_f (kept by the bank for these rows)."""
     import torch
     from _deepring_reimpl_model import corr_max_direct
     npf = t - MIN_INDEX_GAP + 1
@@ -577,7 +578,7 @@ def dump_one(sensor, q, checkpoint, device, sino_backend, block, out_path,
     W, b = model.wb()
     sino = Sino(sino_backend)
     t0 = time.time()
-    bank = SpecBank(n, device)
+    bank = SpecBank(n, device, keep=set(range(256)) | {n // 4, n // 2, n - 1})
     embed_into(model, packed, sino, device, bank)
     if device == "cuda":
         torch.cuda.synchronize()
@@ -602,15 +603,15 @@ def dump_one(sensor, q, checkpoint, device, sino_backend, block, out_path,
         "min_index_gap": MIN_INDEX_GAP, "n_frames": int(n), "n_queries": int(nq),
         "primary_score": "score_corr",
         "scores": {"score_corr": "DeepRING classifier logit W*C + b (eq. 9 before softmax; "
-                                 "C = eq. 8 max circular correlation of M_f) of the exhaustive "
+                                 "C = eq. 8 as RING's circorr2 score of M_f) of the exhaustive "
                                  "prefix top-1, MINUS 1 (constant offset of the shared writer "
                                  "_causal_ring_pr.dump_variant); similarity, higher = accept"},
         "W": W, "b": b,
         "pipeline": "official_points -> generate_bev_occ -> generate_RING sinogram (RING repo "
                     f"@ {rol.RING_COMMIT}) -> UNet ({UNET_UPSTREAM}, is_circular=True) -> row "
-                    "|DFT| -> eq. 8 vs every keyframe j <= t - 30 -> argmax W C + b",
+                    "|DFT| -> eq. 8 (RING circorr2 score) vs every keyframe j <= t - 30 -> argmax W C + b",
         "dataset_table_row": rol.DATASET_TABLE[sensor],
-        "scorer": f"SpecBank rfft-theta bank, fp32 bmm (TF32 off), query blocks of {block}",
+        "scorer": f"SpecBank: per-frame InstanceNorm + fft2(dim=-2) bank (RING circorr2 hoist), query blocks of {block}",
         "scorer_crosscheck": xc,
         "artifacts": {"checkpoint": str(checkpoint) if checkpoint else None,
                       "checkpoint_sha256": sha256_file(Path(checkpoint)) if checkpoint else None,

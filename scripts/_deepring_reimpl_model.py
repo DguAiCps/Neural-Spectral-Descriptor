@@ -26,9 +26,17 @@ unchanged:
   row DFT     |FFT_tau| per theta row, norm='ortho', +1e-15 inside the sqrt
               = RINGSharp ring_sharp_l.forward_row_fft (the RING repo
               utils.core.forward_row_fft is the same without the epsilon).
+  eq. 8       the max circular correlation over theta, computed as RING's own
+              retrieval score (RING repo utils/circorr2.py circular_corr with
+              zero_mean_normalize=True, i.e. 1 - utils.core.batch_circorr dist
+              as in evaluation/evaluate.py): nn.InstanceNorm2d per descriptor,
+              fft2(dim=-2) cross-correlation, |corr| summed over channels and
+              tau, max over the shift, / (0.15 c h w) -> corr_max, SpecBank.
+              RING-based on the user's suggestion (2026-10-21): eq. 8 as
+              printed (un-normalized signed sum) gave first-step logits of
+              10^2-10^3, an exploding loss, and descriptors collapsing to one
+              map (loss ln 24: all 20 epochs of seed 3, 10 of seed 1).
 Written from the paper (no released counterpart):
-  eq. 8       C(M1, M2) = max_a sum_theta sum_omega M1(theta + a, omega) M2(theta, omega)
-              -- un-normalized, as printed (corr_max; FFT over theta).
   eq. 9       C~ = Softmax(W C + b), W, b in R  -- nn.Linear(1, 1).
   loss        cross entropy over the support classes (Sec. III-C).
   episodes    24 classes x (1 shot + 6 queries); same class = within 10 m,
@@ -96,62 +104,72 @@ class DeepRING(nn.Module):
         return float(self.fc.weight.detach().reshape(())), float(self.fc.bias.detach().reshape(()))
 
 
+def ring_fft(M: torch.Tensor) -> torch.Tensor:
+    """circorr2.circular_corr per-input step: InstanceNorm2d (affine=False,
+    eps 1e-5; F.instance_norm is what the module calls), fft2(dim=-2, ortho)."""
+    return torch.fft.fft2(F.instance_norm(M), dim=-2, norm="ortho")
+
+
+def ring_score(prod: torch.Tensor) -> torch.Tensor:
+    """circorr2.circular_corr from the spectral product (..., c, h, w) of two
+    ring_fft inputs: |ifft2(dim=-2)| (+1e-15) summed over channels and tau,
+    max over the shift, / (0.15 c h w)."""
+    corr = torch.fft.ifft2(prod, dim=-2, norm="ortho")
+    mag = torch.sqrt(corr.real ** 2 + corr.imag ** 2 + 1e-15)
+    c, h, w = prod.shape[-3:]
+    return mag.sum(dim=-3).sum(dim=-1).max(dim=-1).values / (0.15 * c * h * w)
+
+
 def corr_max(Mq: torch.Tensor, Ms: torch.Tensor) -> torch.Tensor:
-    """eq. 8 for all pairs: C[q, s] = max_a sum_{c, theta, omega}
-    Mq[q, c, theta + a, omega] * Ms[s, c, theta, omega]  (indices mod 120).
-    Cross-correlation theorem along theta (rfft; exact for real inputs)."""
-    A = torch.fft.rfft(Mq, dim=-2)                     # (Q, C, 61, W)
-    B = torch.fft.rfft(Ms, dim=-2)                     # (S, C, 61, W)
-    G = torch.einsum('qckw,sckw->qsk', A, B.conj())    # (Q, S, 61)
-    corr = torch.fft.irfft(G, n=Mq.shape[-2], dim=-1)  # (Q, S, 120): shift a
-    return corr.max(dim=-1).values
+    """eq. 8 as RING's circorr2 score for all pairs, C (Q, S); differentiable."""
+    return ring_score(ring_fft(Mq).unsqueeze(1) * ring_fft(Ms).conj().unsqueeze(0))
 
 
 def corr_max_direct(Mq: torch.Tensor, Ms: torch.Tensor) -> torch.Tensor:
-    """Reference for checks: eq. 8 written out with torch.roll."""
-    H = Mq.shape[-2]
-    Sf = Ms.reshape(len(Ms), -1)
-    cols = [torch.roll(Mq, shifts=-a, dims=-2).reshape(len(Mq), -1) @ Sf.T
-            for a in range(H)]
-    return torch.stack(cols, dim=-1).max(dim=-1).values
+    """Reference for checks: the RING repo's own utils.core.batch_circorr, one
+    query at a time; returns 1 - dist (Q, S) float64."""
+    import _ring_official_lib as rol
+    core = rol.import_ring_core()
+    rows = []
+    for i in range(len(Mq)):
+        dist, _ = core.batch_circorr(Mq[i:i + 1].repeat(len(Ms), 1, 1, 1), Ms)
+        rows.append(1.0 - np.asarray(dist, dtype=np.float64).reshape(-1))
+    return torch.from_numpy(np.stack(rows))
 
 
 class SpecBank:
-    """Retrieval form of eq. 8 for one sequence: rfft_theta of every M_f kept
-    as a real (61, n, 240) bank [Re | Im]; a block of queries is scored
-    against rows [0, ncols) with one batched matmul over the 61 theta
-    frequencies, then irfft over the shift and max (same value as corr_max).
-    Only rows < ncols are read."""
+    """Retrieval form of corr_max for one sequence: the exact per-frame hoist
+    of circorr2 used for the RING rows of Table 2 (_causal_ring_pr.
+    precompute_fft_bank / correlate_prefix_fast): ring_fft once per frame into
+    a complex64 (n, 1, 120, 120) bank; a block of queries is scored against
+    rows [0, ncols) in chunks of at most `pairs` query-candidate pairs.  Only
+    rows < ncols are read.  Rows in `keep` also retain their raw M_f (checks)."""
 
-    def __init__(self, n: int, device: str):
-        self.n, self.device = n, device
-        self.K = N_THETA // 2 + 1
-        self.bank = torch.empty((self.K, n, 2 * N_TAU), dtype=torch.float32, device=device)
+    def __init__(self, n: int, device: str, keep=(), pairs: int = 4096):
+        self.n, self.device, self.pairs = n, device, pairs
+        self.bank = torch.empty((n, 1, N_THETA, N_TAU), dtype=torch.complex64, device=device)
+        self.keep, self.raw = {int(i) for i in keep}, {}
 
     def put(self, i0: int, M: torch.Tensor):
-        A = torch.fft.rfft(M.to(self.device, torch.float32), dim=-2)[:, 0]   # (m, 61, 120)
-        i1 = i0 + len(A)
-        self.bank[:, i0:i1, :N_TAU] = A.real.permute(1, 0, 2)
-        self.bank[:, i0:i1, N_TAU:] = A.imag.permute(1, 0, 2)
+        M = M.to(self.device, torch.float32)
+        self.bank[i0:i0 + len(M)] = ring_fft(M)
+        for i in self.keep & set(range(i0, i0 + len(M))):
+            self.raw[i] = M[i - i0].cpu()
 
     def rows(self, idx) -> torch.Tensor:
-        """M_f of bank rows idx, (m, 1, 120, 120), by the inverse rfft (checks)."""
-        idx = torch.as_tensor(np.asarray(idx), device=self.device)
-        A = torch.complex(self.bank[:, idx, :N_TAU], self.bank[:, idx, N_TAU:])   # (61, m, 120)
-        return torch.fft.irfft(A.permute(1, 0, 2), n=N_THETA, dim=-2).unsqueeze(1)
+        """raw M_f of kept rows idx, (m, 1, 120, 120) (checks)."""
+        return torch.stack([self.raw[int(i)] for i in idx])
 
     def corr(self, qidx, ncols: int) -> torch.Tensor:
         """C (len(qidx), ncols) for queries qidx (rows of this bank)."""
         qidx = torch.as_tensor(np.asarray(qidx), device=self.device)
-        A = self.bank[:, qidx, :]                                   # (61, B, 240) [Ar|Ai]
-        Ar, Ai = A[..., :N_TAU], A[..., N_TAU:]
-        q_re = A.transpose(1, 2)                                    # [Ar; Ai]
-        q_im = torch.cat([Ai, -Ar], dim=-1).transpose(1, 2)         # [Ai; -Ar]
-        nb = len(qidx)
-        Gk = torch.bmm(self.bank[:, :ncols, :], torch.cat([q_re, q_im], dim=2))
-        G = torch.complex(Gk[..., :nb], Gk[..., nb:])               # (61, ncols, B)
-        corr = torch.fft.irfft(G.permute(2, 1, 0), n=N_THETA, dim=-1)   # (B, ncols, 120)
-        return corr.max(dim=-1).values
+        A = self.bank[qidx].unsqueeze(1)                            # (B, 1, c, h, w)
+        k = max(1, self.pairs // len(qidx))
+        out = torch.empty((len(qidx), ncols), dtype=torch.float32, device=self.device)
+        for j0 in range(0, ncols, k):
+            j1 = min(j0 + k, ncols)
+            out[:, j0:j1] = ring_score(A * self.bank[j0:j1].conj().unsqueeze(0))
+        return out
 
 
 class EpisodeSampler:
