@@ -67,6 +67,58 @@ def write_json(path: Path, value: dict) -> None:
     os.replace(tmp, path)
 
 
+METRICS = (*AGG_METRICS, "R@1")
+
+
+def aggregate(folder, prefix, score_name, summary_name, summary_key, track) -> dict | None:
+    """한 실행(결과 폴더)의 시험 기록을 공통 질의로 재집계한다. 기록이 46개 모두 없으면 None.
+    방법 자체 요약의 시퀀스별 값을 그대로 재현하는지, 질의·정답 거리·후보 규칙이 같은지 확인한다."""
+    folder = REPO / folder
+    paths = {(s, q): folder / f"{prefix}_{s}_{q}.npz" for s, q in TEST}
+    if not all(p.exists() for p in paths.values()):
+        return None
+    original = json.loads(track(folder / summary_name).read_text())[summary_key]
+    per = {}
+    for sensor, seq in TEST:
+        ref = track(COMMON / f"s1/test_selected_symmetric_pbev128_main_{sensor}_{seq}.npz")
+        with np.load(track(paths[(sensor, seq)])) as z, np.load(ref) as n:
+            qc = classify_queries(z["min_past_gt_dist"])
+            old = original["per_sequence"][f"{sensor}/{seq}"]
+            if qc["n_pos"]:                       # 방법 자체 집계를 그대로 재현하는지 확인
+                sw = pr_sweep(z[score_name], z["top1_geo_dist"], qc)
+                for k in AGG_METRICS:
+                    assert abs(sw[k] - old[k]) < 1e-12, (str(folder), sensor, seq, k, sw[k], old[k])
+            ix = np.searchsorted(z["query_idx"], n["query_idx"])
+            np.testing.assert_array_equal(z["query_idx"][ix], n["query_idx"])
+            np.testing.assert_array_equal(z["min_past_gt_dist"][ix], n["min_past_gt_dist"])
+            assert len(ix) == len(z["query_idx"]) - 15
+            assert np.all(z["j_star"][ix] <= n["query_idx"] - 30)
+            qc = classify_queries(z["min_past_gt_dist"][ix])
+            row = {"n_queries": len(ix), "n_positive": qc["n_pos"],
+                   "n_negative": qc["n_neg"], "n_ambiguous": qc["n_ambiguous"]}
+            if qc["n_pos"]:
+                sw = pr_sweep(z[score_name][ix], z["top1_geo_dist"][ix], qc)
+                row.update({k: float(sw[k]) for k in AGG_METRICS})
+                row["R@1"] = float((z["top1_geo_dist"][ix][qc["positive"]] <= 5).mean())
+            else:
+                row.update({k: None for k in METRICS})
+                row["negative_score_quantiles"] = np.quantile(
+                    z[score_name][ix][qc["negative"]], [0, .5, .95, 1]).tolist()
+            per[f"{sensor}/{seq}"] = row
+    groups = {city: {k: float(np.mean([per[s][k] for s in names if per[s]["n_positive"]]))
+                     for k in METRICS} for city, names in CITY.items()}
+    macro = {k: float(np.mean([g[k] for g in groups.values()])) for k in METRICS}
+    entry = {"source": str(folder.relative_to(REPO)), "ledger_prefix": prefix, "score": score_name,
+             "per_sequence": per, "city_groups": groups, "macro": macro,
+             "n_queries": sum(r["n_queries"] for r in per.values()),
+             "n_positive": sum(r["n_positive"] for r in per.values()),
+             "excluded_no_positive": [s for s, r in per.items() if not r["n_positive"]]}
+    assert entry["n_queries"] == 195726
+    assert entry["n_positive"] == 61682
+    assert entry["excluded_no_positive"] == ["kitti/07"]
+    return entry
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     sources = {}
@@ -83,55 +135,14 @@ def main() -> None:
               "information_access": ("비교 방법은 각자 기록의 입력을 쓴다. SeqOT은 공식 가운데 정렬 창으로 "
                                      "질의 원시 스캔 뒤 최대 10장을 보며, 이는 NSD의 q+15 대기 안이다."),
               "methods": {}, "missing": []}
-    metrics = (*AGG_METRICS, "R@1")
     for method, folder, prefix, score_name, summary_name, summary_key in METHODS:
-        folder = REPO / folder
-        paths = {(s, q): folder / f"{prefix}_{s}_{q}.npz" for s, q in TEST}
-        if not all(p.exists() for p in paths.values()):
+        entry = aggregate(folder, prefix, score_name, summary_name, summary_key, track)
+        if entry is None:
             report["missing"].append(method)
             print(method, "missing ledgers, skipped", flush=True)
             continue
-        original = json.loads(track(folder / summary_name).read_text())[summary_key]
-        per = {}
-        for sensor, seq in TEST:
-            ref = track(COMMON / f"s1/test_selected_symmetric_pbev128_main_{sensor}_{seq}.npz")
-            with np.load(track(paths[(sensor, seq)])) as z, np.load(ref) as n:
-                qc = classify_queries(z["min_past_gt_dist"])
-                old = original["per_sequence"][f"{sensor}/{seq}"]
-                if qc["n_pos"]:                       # 방법 자체 집계를 그대로 재현하는지 확인
-                    sw = pr_sweep(z[score_name], z["top1_geo_dist"], qc)
-                    for k in AGG_METRICS:
-                        assert abs(sw[k] - old[k]) < 1e-12, (method, sensor, seq, k, sw[k], old[k])
-                ix = np.searchsorted(z["query_idx"], n["query_idx"])
-                np.testing.assert_array_equal(z["query_idx"][ix], n["query_idx"])
-                np.testing.assert_array_equal(z["min_past_gt_dist"][ix], n["min_past_gt_dist"])
-                assert len(ix) == len(z["query_idx"]) - 15
-                assert np.all(z["j_star"][ix] <= n["query_idx"] - 30)
-                qc = classify_queries(z["min_past_gt_dist"][ix])
-                row = {"n_queries": len(ix), "n_positive": qc["n_pos"],
-                       "n_negative": qc["n_neg"], "n_ambiguous": qc["n_ambiguous"]}
-                if qc["n_pos"]:
-                    sw = pr_sweep(z[score_name][ix], z["top1_geo_dist"][ix], qc)
-                    row.update({k: float(sw[k]) for k in AGG_METRICS})
-                    row["R@1"] = float((z["top1_geo_dist"][ix][qc["positive"]] <= 5).mean())
-                else:
-                    row.update({k: None for k in metrics})
-                    row["negative_score_quantiles"] = np.quantile(
-                        z[score_name][ix][qc["negative"]], [0, .5, .95, 1]).tolist()
-                per[f"{sensor}/{seq}"] = row
-        groups = {city: {k: float(np.mean([per[s][k] for s in names if per[s]["n_positive"]]))
-                         for k in metrics} for city, names in CITY.items()}
-        macro = {k: float(np.mean([g[k] for g in groups.values()])) for k in metrics}
-        entry = {"source": str(folder.relative_to(REPO)), "ledger_prefix": prefix, "score": score_name,
-                 "per_sequence": per, "city_groups": groups, "macro": macro,
-                 "n_queries": sum(r["n_queries"] for r in per.values()),
-                 "n_positive": sum(r["n_positive"] for r in per.values()),
-                 "excluded_no_positive": [s for s, r in per.items() if not r["n_positive"]]}
-        assert entry["n_queries"] == 195726
-        assert entry["n_positive"] == 61682
-        assert entry["excluded_no_positive"] == ["kitti/07"]
         report["methods"][method] = entry
-        print(method, {k: round(v, 4) for k, v in macro.items()}, flush=True)
+        print(method, {k: round(v, 4) for k, v in entry["macro"].items()}, flush=True)
     report["input_sha256"] = sources
     report["checks_passed"] = True
     write_json(OUT / "baselines_common.json", report)
