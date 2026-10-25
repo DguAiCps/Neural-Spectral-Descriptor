@@ -8,6 +8,9 @@
   (results/pdv2_c3_bevclip_s1/odom/dump_pdv2_causal_pbev128_main_s1_*)과 같아야 한다.
 - 집계: 시퀀스 → 도시 6개 평균 → 매크로. 방법 자체 요약과 NSD 과거 전용 요약을 같은 규칙으로
   다시 계산해 일치를 확인한다. 새 추론·선택은 없다.
+- 시드: 학습 방법은 _pdv2_baseline_seeds.SEED_FOLDERS의 시드 3개(DeepRING 1·3·4) 평균과 표본
+  표준편차(2026-10-25 사용자 결정). 공식 SeqOT 과거 창 실행은 시드 1뿐이다(2·3시드는 가운데 정렬
+  창으로만 학습·선택). 학습 없는 SC++·RING·RING++는 실행 하나다.
 """
 from __future__ import annotations
 
@@ -19,6 +22,7 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
+from _pdv2_baseline_seeds import SEED_FOLDERS, TRAINING_FREE
 from _pdv2_main_baselines_official import METHODS, sha256, write_json
 from _pdv2_pilot import CITY, TEST
 from _pr_eval_lib import AGG_METRICS, classify_queries, pr_sweep
@@ -56,42 +60,58 @@ def main() -> None:
         for k in METRICS:
             assert abs(macro[k] - nsd[op]["city_macro6"][k]) < 1e-12, (op, k)
     report = {"_meta": {
-        "scope": "공식 코드 비교 방법의 시드 1 시험 기록을 과거 전용 표의 전체 질의로 재집계; 새 선택·추론 없음",
+        "scope": "공식 코드 비교 방법의 시드별 시험 기록을 과거 전용 표의 전체 질의로 재집계, 시드 평균·표본 표준편차; 새 선택·추론 없음",
         "queries": "각 시퀀스의 전체 질의(q >= 30), NSD 과거 전용 기록과 같은 질의 번호",
         "candidates": "j <= q-30",
         "past_only": "한 장 방법은 질의 키프레임만 쓴다. SeqOT은 공식 코드의 과거 창(원시 스캔 [s-21, s])",
         "condition": "odom"}}
     for method, folder, prefix, score_name, summary_name, summary_key in CAUSAL_METHODS:
-        folder = REPO / folder
-        original = json.loads(track(folder / summary_name).read_text())[summary_key]
-        per = {}
-        for sensor, seq in TEST:
-            name = f"{sensor}/{seq}"
-            ref = track(NSD / f"dump_pdv2_causal_pbev128_main_s1_{sensor}_{seq}.npz")
-            with np.load(track(folder / f"{prefix}_{sensor}_{seq}.npz")) as z, np.load(ref) as n:
-                np.testing.assert_array_equal(z["query_idx"], n["query_idx"])
-                np.testing.assert_array_equal(z["min_past_gt_dist"], n["min_past_gt_dist"])
-                assert np.all(z["j_star"] <= z["query_idx"] - 30)
-                qc = classify_queries(z["min_past_gt_dist"])
-                assert qc["n_pos"], (method, name)
-                sw = pr_sweep(z[score_name], z["top1_geo_dist"], qc)
-                row = {k: float(sw[k]) for k in AGG_METRICS}
-                row["R@1_revisit"] = float((z["top1_geo_dist"][qc["positive"]] <= 5).mean())
-                row.update(n_queries=len(z["query_idx"]), n_positive=qc["n_pos"])
-            for k in METRICS:                       # 방법 자체 요약을 그대로 재현하는지
-                assert abs(row[k] - original["per_sequence"][name][k]) < 1e-12, (method, name, k)
-            per[name] = row
-        groups, macro = city_macro(per)
-        for k in METRICS:
-            assert abs(macro[k] - original["city_macro6"][k]) < 1e-12, (method, k)
-        report[method] = {"source": str(folder.relative_to(REPO)), "ledger_prefix": prefix,
-                          "score": score_name, "per_sequence": per, "city_groups": groups,
-                          "city_macro6": macro,
-                          "n_queries": sum(r["n_queries"] for r in per.values())}
-        print(method, {k: round(v, 4) for k, v in macro.items()}, flush=True)
+        if method in TRAINING_FREE:
+            runs = [("-", folder)]
+        elif method == "seqot":
+            runs = [("1", folder)]                  # 과거 창 공식 실행은 시드 1뿐
+        else:
+            runs = [(str(sd), f) for sd, f in SEED_FOLDERS[method]]
+        per_seed = {}
+        for seed, f in runs:
+            per_seed[seed] = one_run(REPO / f, prefix, score_name, summary_name, summary_key, track)
+        vals = {k: [r["city_macro6"][k] for r in per_seed.values()] for k in METRICS}
+        report[method] = {"score": score_name, "seeds": list(per_seed), "per_seed": per_seed,
+                          "city_macro6": {k: float(np.mean(v)) for k, v in vals.items()},
+                          "city_macro6_std": ({k: float(np.std(v, ddof=1)) for k, v in vals.items()}
+                                              if len(per_seed) > 1 else None)}
+        print(method, report[method]["seeds"], {k: round(v, 4) for k, v in report[method]["city_macro6"].items()}, flush=True)
     report["_meta"]["input_sha256"] = sources
     report["_meta"]["checks_passed"] = True
     write_json(OUT / "pr_summary_baselines.json", report)
+
+
+def one_run(folder, prefix, score_name, summary_name, summary_key, track) -> dict:
+    """한 실행의 전체 질의 재집계(질의·과거 최근접 거리가 NSD 과거 전용 기록과 같아야 한다)."""
+    original = json.loads(track(folder / summary_name).read_text())[summary_key]
+    per = {}
+    for sensor, seq in TEST:
+        name = f"{sensor}/{seq}"
+        ref = track(NSD / f"dump_pdv2_causal_pbev128_main_s1_{sensor}_{seq}.npz")
+        with np.load(track(folder / f"{prefix}_{sensor}_{seq}.npz")) as z, np.load(ref) as n:
+            np.testing.assert_array_equal(z["query_idx"], n["query_idx"])
+            np.testing.assert_array_equal(z["min_past_gt_dist"], n["min_past_gt_dist"])
+            assert np.all(z["j_star"] <= z["query_idx"] - 30)
+            qc = classify_queries(z["min_past_gt_dist"])
+            assert qc["n_pos"], (str(folder), name)
+            sw = pr_sweep(z[score_name], z["top1_geo_dist"], qc)
+            row = {k: float(sw[k]) for k in AGG_METRICS}
+            row["R@1_revisit"] = float((z["top1_geo_dist"][qc["positive"]] <= 5).mean())
+            row.update(n_queries=len(z["query_idx"]), n_positive=qc["n_pos"])
+        for k in METRICS:                       # 방법 자체 요약을 그대로 재현하는지
+            assert abs(row[k] - original["per_sequence"][name][k]) < 1e-12, (str(folder), name, k)
+        per[name] = row
+    groups, macro = city_macro(per)
+    for k in METRICS:
+        assert abs(macro[k] - original["city_macro6"][k]) < 1e-12, (str(folder), k)
+    return {"source": str(folder.relative_to(REPO)), "ledger_prefix": prefix,
+            "per_sequence": per, "city_groups": groups, "city_macro6": macro,
+            "n_queries": sum(r["n_queries"] for r in per.values())}
 
 
 if __name__ == "__main__":

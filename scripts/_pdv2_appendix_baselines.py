@@ -9,7 +9,8 @@
 - 판정 통계 이식: 각 비교 방법이 고른 1위 후보에 NSD의 학습 없는 판정 통계 c_spec
   (조감도 스펙트럼, 시드와 무관)을 고정해서 붙인다. 고르기·조정은 없다. R@1은 1위 후보가
   같으므로 바뀌지 않는다. 다시 계산한 c_spec이 NSD 기록 값과 같은지 먼저 확인한다.
-NSD·NSD-H는 시드 3개 평균과 표본 표준편차, 비교 방법은 시드 1이다.
+NSD·NSD-H와 학습하는 비교 방법은 시드 3개 평균과 표본 표준편차(시드 목록은 _pdv2_baseline_seeds.SEED_FOLDERS,
+DeepRING 1·3·4), 학습 없는 SC++·RING·RING++는 실행 하나의 값이다.
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 import _pr_eval_lib as P
+from _pdv2_baseline_seeds import SEED_FOLDERS, TRAINING_FREE
 from _pdv2_main_baselines_official import METHODS, sha256, write_json
 from _pdv2_pilot import CITY, TEST
 from _pr_eval_lib import classify_queries, pr_sweep
@@ -112,20 +114,22 @@ def main() -> None:
                 row.setdefault("opposite", {})[key] = metrics(s, t, m, group, 1)
                 row.setdefault("r10", {})[key] = metrics(s, t, m, radius=10.0)
         for method, folder, prefix, score_name, _, _ in METHODS:
-            path = REPO / folder / f"{prefix}_{sensor}_{seq}.npz"
-            if not path.exists():
-                continue
-            b = np.load(track(path))
-            ix = np.searchsorted(b["query_idx"], ref["query_idx"])
-            np.testing.assert_array_equal(b["query_idx"][ix], ref["query_idx"])
-            s, t, m = b[score_name][ix], b["top1_geo_dist"][ix], b["min_past_gt_dist"][ix]
-            row = per.setdefault(method, {})
-            row.setdefault("all", {})[key] = metrics(s, t, m)
-            row.setdefault("same", {})[key] = metrics(s, t, m, group, 0)
-            row.setdefault("opposite", {})[key] = metrics(s, t, m, group, 1)
-            row.setdefault("r10", {})[key] = metrics(s, t, m, radius=10.0)
-            cs = pair_spec(bfft, bnorm, b["query_idx"][ix], b["j_star"][ix])
-            row.setdefault("cspec", {})[key] = metrics(cs, t, m)
+            runs = [(None, folder)] if method in TRAINING_FREE else SEED_FOLDERS[method]
+            for seed, f in runs:
+                path = REPO / f / f"{prefix}_{sensor}_{seq}.npz"
+                if not path.exists():
+                    continue
+                b = np.load(track(path))
+                ix = np.searchsorted(b["query_idx"], ref["query_idx"])
+                np.testing.assert_array_equal(b["query_idx"][ix], ref["query_idx"])
+                s, t, m = b[score_name][ix], b["top1_geo_dist"][ix], b["min_past_gt_dist"][ix]
+                row = per.setdefault(method if seed is None else f"{method}|s{seed}", {})
+                row.setdefault("all", {})[key] = metrics(s, t, m)
+                row.setdefault("same", {})[key] = metrics(s, t, m, group, 0)
+                row.setdefault("opposite", {})[key] = metrics(s, t, m, group, 1)
+                row.setdefault("r10", {})[key] = metrics(s, t, m, radius=10.0)
+                cs = pair_spec(bfft, bnorm, b["query_idx"][ix], b["j_star"][ix])
+                row.setdefault("cspec", {})[key] = metrics(cs, t, m)
         print(key, flush=True)
     assert max_err < 1e-5, f"c_spec 재계산이 NSD 기록과 다르다: {max_err}"
     result = {}
@@ -133,11 +137,15 @@ def main() -> None:
         if any(len(v) != len(TEST) for v in variants.values()):
             continue                                    # 46개가 다 없는 방법은 뺀다
         result[name] = {v: macro(seqs) for v, seqs in variants.items()}
-    for _, label in OPS:
-        seeds = [result.pop(f"{label}|s{sd}") for sd in ("1", "2", "3")]
-        result[label] = {v: {k: {"mean": float(np.mean([s[v][k] for s in seeds])),
-                                 "std": float(np.std([s[v][k] for s in seeds], ddof=1))}
-                             for k in KEYS} for v in seeds[0]}
+    groups = {label: [f"{label}|s{sd}" for sd in ("1", "2", "3")] for _, label in OPS}
+    groups.update({m: [f"{m}|s{sd}" for sd, _ in runs] for m, runs in SEED_FOLDERS.items()})
+    for name, keys in groups.items():
+        assert all(k in result for k in keys), (name, [k for k in keys if k not in result])
+        seeds = [result.pop(k) for k in keys]
+        result[name] = {v: {k: {"mean": float(np.mean([s[v][k] for s in seeds])),
+                                "std": float(np.std([s[v][k] for s in seeds], ddof=1)),
+                                "values": [float(s[v][k]) for s in seeds]}
+                            for k in KEYS} for v in seeds[0]}
     write_json(OUT / "summary.json", {
         "scope": "주표 공통 질의의 부록 분석(방향별, 정답 반경 10 m, NSD c_spec 이식); 새 선택·추론 없음",
         "direction_groups": {"same": 0, "opposite": 1},

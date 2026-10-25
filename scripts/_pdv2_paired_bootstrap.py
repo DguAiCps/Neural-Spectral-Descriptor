@@ -4,15 +4,15 @@
 설계(실행 전 고정, 2026-10-16). 이미 본 시험 기록에 대한 사후 분석이다.
 - 기록: 주표와 같은 공통 질의(30 <= q < N-15, j <= q-30). NSD·NSD-H는 시드 1·2·3의 대칭 문맥
   기록과 시드별로 검증에서 고른 판정 점수, 비교 방법은 _pdv2_main_baselines_official.METHODS의
-  시드 1 기록과 점수다. 판정 점수와 질의 분류(양성 5 m 이내·음성 25 m 초과·나머지 제외)는 그대로 둔다.
+  점수와 _pdv2_baseline_seeds.SEED_FOLDERS의 시드 기록이다(학습 없는 SC++·RING·RING++는 실행 하나;
+  2026-10-25 사용자 결정으로 시드 1에서 시드 평균으로 바꿈). 판정 점수와 질의 분류(양성 5 m 이내·음성 25 m 초과·나머지 제외)는 그대로 둔다.
 - 재표집(두 단계, 모든 방법에 같은 표본): ① 도시마다 그 도시의 시퀀스를 복원 추출,
   ② 시퀀스마다 연속 질의 BLOCK=100개 블록을 복원 추출해 원래 길이만큼 이어 붙인다.
 - 지표: 표본마다 시퀀스별 AP·최대 F1·R@100P·R@1을 다시 계산 → 도시 평균(양성이 있는 시퀀스만)
-  → 6개 도시 평균. NSD·NSD-H는 같은 표본에서 시드 셋을 각각 계산해 평균한다(주표의 시드 평균).
+  → 6개 도시 평균. 시드가 여럿인 방법은 같은 표본에서 시드마다 계산해 평균한다(주표의 시드 평균).
 - 반복 B=2000, 난수 시드 20261016. 차이의 95% 백분위 구간, 한쪽 p = P(차이 <= 0),
   지표·운영점마다 비교 방법들에 대해 Holm 보정.
-- 구간은 평가한 학습 실행(NSD 시드 3개, 비교 방법 시드 1)에 조건을 둔다. 비교 방법의 시드 변동은
-  들어 있지 않다.
+- 구간은 평가한 학습 실행(시드 3개씩)에 조건을 둔다. 시드 간 변동은 재표집하지 않는다.
 """
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
+from _pdv2_baseline_seeds import SEED_FOLDERS, TRAINING_FREE
 from _pdv2_main_baselines_official import METHODS, sha256, write_json
 from _pdv2_pilot import CITY, TEST
 from _pr_eval_lib import classify_queries, pr_sweep
@@ -73,7 +74,7 @@ def one_replicate(r):
     for method, seqs in DATA.items():
         if method == "_class":
             continue
-        if isinstance(seqs, list):                               # NSD 시드 셋
+        if isinstance(seqs, list):                               # 시드 셋: 시드마다 계산해 평균
             vals = [macro({nm: seq_metrics(*sd[nm], DATA["_class"][nm], idx[nm]) if nm in idx else None
                            for nm in SEQS}, seq_draw) for sd in seqs]
             out[method] = np.mean(vals, axis=0)
@@ -108,11 +109,13 @@ def main() -> None:
     for op, label in OPS:
         DATA[label] = [{}, {}, {}]
     missing = []
+    runs = {m: ([folder] if m in TRAINING_FREE else [f for _, f in SEED_FOLDERS[m]])
+            for m, folder, *_ in METHODS}
     for method, folder, prefix, score_name, _, _ in METHODS:
-        if not all((REPO / folder / f"{prefix}_{s}_{q}.npz").exists() for s, q in TEST):
+        if not all((REPO / f / f"{prefix}_{s}_{q}.npz").exists() for f in runs[method] for s, q in TEST):
             missing.append(method)
         else:
-            DATA[method] = {}
+            DATA[method] = [{} for _ in runs[method]] if len(runs[method]) > 1 else {}
     for s, q in TEST:
         nm = f"{s}/{q}"
         ref = np.load(track(NSD_DIR / f"s1/test_selected_symmetric_pbev128_main_{s}_{q}.npz"))
@@ -126,11 +129,13 @@ def main() -> None:
         for method, folder, prefix, score_name, _, _ in METHODS:
             if method in missing:
                 continue
-            b = np.load(track(REPO / folder / f"{prefix}_{s}_{q}.npz"))
-            ix = np.searchsorted(b["query_idx"], ref["query_idx"])
-            np.testing.assert_array_equal(b["query_idx"][ix], ref["query_idx"])
-            np.testing.assert_array_equal(b["min_past_gt_dist"][ix], ref["min_past_gt_dist"])
-            DATA[method][nm] = (b[score_name][ix], b["top1_geo_dist"][ix])
+            for k, f in enumerate(runs[method]):
+                b = np.load(track(REPO / f / f"{prefix}_{s}_{q}.npz"))
+                ix = np.searchsorted(b["query_idx"], ref["query_idx"])
+                np.testing.assert_array_equal(b["query_idx"][ix], ref["query_idx"])
+                np.testing.assert_array_equal(b["min_past_gt_dist"][ix], ref["min_past_gt_dist"])
+                row = DATA[method][k] if isinstance(DATA[method], list) else DATA[method]
+                row[nm] = (b[score_name][ix], b["top1_geo_dist"][ix])
     # 점추정: 재표집 없이 원래 시퀀스·질의 전부(주표 값과 같아야 한다)
     full_idx = {nm: np.arange(len(DATA["_class"][nm]["positive"])) for nm in SEQS}
     full_draw = {c: list(v) for c, v in CITY_SEQS.items()}
@@ -164,9 +169,11 @@ def main() -> None:
     write_json(OUT / "summary.json", {
         "design": {"block_queries": BLOCK, "replicates": B, "seed": SEED,
                    "levels": "도시 안 시퀀스 복원 추출 → 시퀀스 안 연속 질의 블록 복원 추출(모든 방법 공통)",
-                   "nsd": "시드 1·2·3을 같은 표본에서 계산해 평균", "baselines": "시드 1",
+                   "nsd": "시드 1·2·3을 같은 표본에서 계산해 평균",
+                   "baselines": "학습 방법은 시드 3개(DeepRING 1·3·4)를 같은 표본에서 계산해 평균, 학습 없는 방법은 실행 하나",
+                   "seed_runs": runs,
                    "p": "한쪽 p = (#{차이 <= 0} + 1) / (B + 1), 지표·운영점마다 Holm 보정",
-                   "conditional_on": "평가한 학습 실행; 비교 방법의 시드 변동은 포함하지 않음",
+                   "conditional_on": "평가한 학습 실행(시드 3개씩); 시드 간 변동은 재표집하지 않음",
                    "post_hoc": "이미 본 시험 기록에 대한 사후 분석"},
         "missing_methods": missing, **result, "input_sha256": sources, "checks_passed": True})
     for _, label in OPS:
