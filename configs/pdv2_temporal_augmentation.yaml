@@ -1,0 +1,41 @@
+seed: 1
+arms:
+- clean_rank
+- augmented_rank
+- augmented_consistent
+initial_model: interaction
+initial_epoch: 20
+encoder_preset: no_interdiff
+use_gated_context: true
+gate_initial_alpha: 0.0625
+epochs: 4
+checkpoint_epochs:
+- 2
+- 4
+batch_queries: 512
+learning_rate: 5.0e-05
+weight_decay: 1.0e-05
+gradient_clip: 1.0
+temperature: 0.1
+margin_cap: 0.1
+guard_coefficient: 1.0
+training_mode: float32_eval_frozen_bn_no_dropout
+candidate_mode: fixed_initial_actual_top100_union_aux100
+final_score: arc_unique_b100
+checkpoint_selection: validation_final_AP_then_earlier_epoch
+promotion:
+  ap_gain_min: 0.001
+  f1_loss_max: 0.001
+  r100_loss_max: 0.001
+  family_ap_loss_max: 0.0025
+test_used: false
+scope: one_seed_temporal_edge_view_augmentation_and_relational_consistency
+views:
+- drop
+- stride
+consistency_temperature: 0.1
+consistency_gradient_ratio: 0.25
+consistency_coefficient_clip:
+- 0.01
+- 100.0
+diagnostic_view_seed: 431

@@ -1,0 +1,12 @@
+# 현재 시간 모델에서 표본·구조를 고정하고 오답 라벨 충돌만 줄인다.
+pilot_seed: 1
+arms: [diff_mask5, diff_mask25, full_mask25, standard_mask25]
+models: {diff_mask5: center_zero, diff_mask25: center_zero, full_mask25: center_full, standard_mask25: standard_tanh}
+radius: {diff_mask5: 5.0, diff_mask25: 25.0, full_mask25: 25.0, standard_mask25: 25.0}
+primary: diff_mask25
+epochs: 20
+checkpoint_epochs: [10, 20]
+updates_per_epoch: 45
+final_score: arc_unique_b100
+references: [center_zero, center_full, standard_tanh, point]
+test_used: false

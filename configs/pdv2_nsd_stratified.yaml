@@ -1,0 +1,10 @@
+# 정보이론/대조학습 관점의 오답 출처 분리. 새로운 MI 하한이나 방법 신규성 주장 아님.
+pilot_seed: 1
+arms: [standard_original, point_original]
+epochs: 20
+checkpoint_epochs: [10, 20]
+explicit_negative_weight: 0.5
+selection: validation_final_nsd_ap
+expansion_min_ap_gain: 0.001
+expansion_r100_loss_tolerance: 0.001
+test_used: false
