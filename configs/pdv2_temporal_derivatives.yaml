@@ -1,0 +1,20 @@
+# 시간 간선의 거리 차분 대조. 시험셋을 사용하지 않는다.
+pilot_seed: 1
+arms: [standard, diff, point, frame, arc]
+primary: arc
+expansion_arms: [standard, point, arc]
+epochs: 20
+checkpoint_epochs: [10, 20]
+updates_per_epoch: 45
+scales_m: [1.6, 3.2]
+minimum_radius_m: 0.4
+half_window: 5
+derivative_hidden_width: 68
+final_score: arc_unique_b100
+selection: validation_final_ap
+promotion:
+  comparators: [standard, point]
+  ap_gain_min: 0.001
+  r100_loss_max: 0.001
+  family_ap_loss_max: 0.0025
+test_used: false

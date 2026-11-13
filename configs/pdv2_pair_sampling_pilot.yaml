@@ -1,0 +1,22 @@
+# 기존 시드 1에서 시작하는 고정 예산 추가 학습이다. 최종 재학습이 아니다.
+base_config: configs/training_place_disjoint_v2_causal.yaml
+initial_checkpoint: checkpoints/pdv2_causal_s1/best_model.pth
+encoder_preset: no_interdiff
+use_gated_context: true
+gate_initial_alpha: 0.0625
+seed: 1
+epochs: 12
+learning_rate: 0.00005
+weight_decay: 0.00001
+temperature: 0.1
+batch_size: 1024
+accumulation_steps: 4
+grad_scaler_initial: 128.0
+grad_scaler_growth_interval: 1000000
+resample_every: 5
+opposite_replacement_fraction: 0.25
+arms: [original, opposite, opposite_masked]
+out: results/pdv2_pair_sampling_20261013
+# 검증된 동일 사이트 좌표계만 공유한다. KITTI 시퀀스는 각각 독립이다.
+shared_coordinate_groups:
+  - [helipr/Bridge01, helipr/Bridge02, helipr/Bridge03, helipr/Bridge04]

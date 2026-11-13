@@ -1,0 +1,10 @@
+# 같은 초기화·표본·학습량의 2×2 문맥 구조 비교. 시험셋은 사용하지 않는다.
+base_training_config: configs/pdv2_matching_mining_pilot.yaml
+seed: 1
+arms: [diff_full, standard_full, diff_temporal, standard_temporal]
+checkpoint_epochs: [10, 20]
+epochs: 20
+sample_source: results/pdv2_matching_mining_20261014/s1/samples
+sample_policy: original
+selection: validation_final_joint_ap
+test_used: false

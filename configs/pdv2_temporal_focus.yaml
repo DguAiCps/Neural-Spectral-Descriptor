@@ -1,0 +1,13 @@
+# 시간 전용 집계 방식 × 실제 반대 방향 쌍의 검증 전용 비교.
+seeds: [1, 2, 3]
+pilot_seed: 1
+epochs: 20
+checkpoint_epochs: [10, 20]
+opposite_fraction: 0.25
+sample_refresh_epochs: [1, 6, 11, 16]
+sample_seed: 20261018
+arms: [diff_original, standard_original, diff_opposite, standard_opposite, point_original, point_opposite]
+reuse_arms: [diff_original, point_original]
+selection: validation_final_joint_ap
+loss: original_infonce
+test_used: false

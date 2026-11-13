@@ -1,0 +1,11 @@
+# 시간 문맥과 이웃 없는 학습 투영의 3시드 최종 검증. 시험 미사용.
+base_training_config: configs/pdv2_matching_mining_pilot.yaml
+seeds: [1, 2, 3]
+arms: [temporal, point]
+epochs: 20
+checkpoint_epochs: [10, 20]
+sample_source: results/pdv2_matching_mining_20261014/s1/samples
+sample_policy: original
+attention: diff
+selection: validation_final_joint_ap
+test_used: false
