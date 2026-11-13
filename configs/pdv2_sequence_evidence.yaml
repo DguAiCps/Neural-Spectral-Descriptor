@@ -1,0 +1,13 @@
+# 검증 결과를 보기 전에 고정하는 NSD 시퀀스 판정 비교.
+seeds: [1, 2, 3]
+models: [standard, capacity_point]
+styles: [arc_sparse, frame_dense, arc_dense, linear_dense, velocity_dense, arc_unique]
+base_beta: [0.25, 0.5, 1.0]
+query_radius: 5
+candidate_radius: 10
+speed_hypotheses: [0.5, 1.0, 1.5, 2.0]
+selection: validation_final_nsd_ap_with_r100_guard
+minimum_paired_ap_gain: 0.001
+maximum_paired_r100_loss: 0.001
+batch_size: 256
+test_used: false

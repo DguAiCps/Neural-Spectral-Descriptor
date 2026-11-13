@@ -1,0 +1,12 @@
+# NSD만의 최종 판정 점수 대조. 재학습·시험 사용 없이 기존 후보 중심을 고정한다.
+seeds: [1, 2, 3]
+models: [standard, capacity_point]
+methods: [raw, psr, temporal_independent, temporal_untransported, temporal_coherent, temporal_coherent_psr]
+op: pbev128_main
+checkpoint_selection: existing_candidates_validation_nsd_ap
+temporal_offset: 5
+psr_guard_bins: 3
+decision_delay: 15
+min_index_gap: 30
+batch_size: 512
+test_used: false
