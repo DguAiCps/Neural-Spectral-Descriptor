@@ -1,0 +1,13 @@
+# 최종 결과를 보기 전에 고정한다. 가중치 감쇠와 값 전달은 유지한다.
+seed: 1
+arms: [additive, interaction, temperature]
+reference: additive
+fixed_epoch: 20
+epochs: 20
+updates_per_epoch: 45
+weight_decay: 0.00001
+final_score: arc_unique_b100
+checkpoint_selection: none_fixed_epoch20
+test_used: false
+promotion: none_single_seed_cause_diagnosis
+usage_probes: [interaction_off, geometry_off]

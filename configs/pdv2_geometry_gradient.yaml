@@ -1,0 +1,13 @@
+# 원인 진단: 같은 초기값·표본·900업데이트에서 세 분기의 실제 기울기를 관측한다.
+seed: 1
+arms: [diff_linear, standard_linear, diff_tanh]
+epochs: 20
+updates_per_epoch: 45
+trace_steps: [1, 2, 3, 5, 10, 20, 30, 45, 60, 90, 135, 180, 225, 270, 315, 360, 405, 450, 495, 540, 585, 630, 675, 720, 765, 810, 855, 900]
+weight_decay: 0.00001
+batch_size: 1024
+accumulation_steps: 4
+loss: original_infonce
+precision: fp16_amp
+test_used: false
+promotion: none_diagnostic_retraining

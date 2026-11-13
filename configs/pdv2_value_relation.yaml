@@ -1,0 +1,24 @@
+# tanh 관계 키는 고정하고 관계 종류와 값 변환의 2x3 효과를 비교한다.
+pilot_seed: 1
+arms: [diff_linear, standard_linear, diff_tanh, standard_tanh, diff_odd_even, standard_odd_even]
+train_arms: [diff_tanh, standard_tanh, diff_odd_even, standard_odd_even]
+reused_arms: {diff_linear: diff_tanh, standard_linear: standard_tanh}
+candidate_arms: [diff_tanh, diff_odd_even]
+reference: point
+epochs: 20
+checkpoint_epochs: [10, 20]
+updates_per_epoch: 45
+relation_key: tanh_after_projection
+value_odd_even: per_head_first_half_tanh_last_half_tanh_squared
+loss: original_infonce_without_geographic_negative_mask
+final_score: arc_unique_b100
+selection: validation_final_ap
+promotion:
+  ap_gain_min: 0.001
+  f1_loss_max: 0.001
+  r100_loss_max: 0.001
+  family_ap_loss_max: 0.0025
+  comparators: [diff_linear, standard_linear, matched_standard, point]
+expansion_seeds: [2, 3]
+expansion: best_eligible_candidate_and_diff_linear_standard_linear_matched_standard_point
+test_used: false

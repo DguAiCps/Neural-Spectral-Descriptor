@@ -1,0 +1,14 @@
+# 기하 분기의 가중치 감쇠만 제거한다. 양쪽 모두 20에포크900갱신으로 고정한다.
+seed: 1
+arms: [diff_tanh, diff_tanh_nodecay]
+train_arms: [diff_tanh_nodecay]
+reference: diff_tanh
+fixed_epoch: 20
+epochs: 20
+updates_per_epoch: 45
+geometry_weight_decay: 0.0
+other_weight_decay: 0.00001
+final_score: arc_unique_b100
+checkpoint_selection: none_fixed_epoch20
+test_used: false
+promotion: none_single_seed_cause_diagnosis

@@ -1,0 +1,15 @@
+# 차이+tanh 주의 키는 고정하고 값의 중심 보존량만 비교한다.
+pilot_seed: 1
+arms: [center_zero, center_half, center_full]
+train_arms: [center_half, center_full]
+beta: {center_zero: 0.0, center_half: 0.5, center_full: 1.0}
+primary: center_half
+epochs: 20
+checkpoint_epochs: [10, 20]
+updates_per_epoch: 45
+final_score: arc_unique_b100
+selection: validation_final_ap
+references: [diff, standard, standard_tanh, point]
+# 보존량0의 기존900회 체크포인트를 재사용하되 모든 검증을 다시 수행한다.
+reuse_zero: pdv2_nonlinear_difference_20261021/s1/diff_tanh
+test_used: false
