@@ -1,0 +1,20 @@
+# 후보 대응의 시간 제약. 결과를 보기 전에 고정하며 시험셋은 쓰지 않는다.
+pilot_seed: 1
+models: [standard, capacity_point]
+arms: [baseline, unary_null, joint_forced, joint_null]
+primary_model: standard
+primary_arm: joint_null
+candidate_top_k: 20
+query_radius: 5
+transition_weight: 0.25
+null_unary: 0.5
+null_transition_cost: 0.15
+directions: [1, -1]
+final_score: arc_unique_b100
+batch_size: 256
+promotion:
+  comparators: [baseline, unary_null]
+  ap_gain_min: 0.001
+  r100_loss_max: 0.001
+  family_ap_loss_max: 0.0025
+test_used: false

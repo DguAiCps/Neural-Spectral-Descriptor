@@ -1,0 +1,9 @@
+# 고정된 두 체크포인트의 후보·점수·정규화 범위만 교차한다.
+seed: 1
+epoch: 20
+models: [additive, interaction]
+variants: [old, new, old_pool_new_key, new_pool_old_key, new_pool_old_ranges, new_pool_raw_key]
+final_score: arc_unique_b100
+new_training_updates: 0
+test_used: false
+promotion: none_mechanism_diagnosis

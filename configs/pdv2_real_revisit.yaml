@@ -1,0 +1,23 @@
+seed: 1
+arms: [clean_rank, pair_key, pair_context]
+encoder_preset: no_interdiff
+use_gated_context: true
+gate_initial_alpha: 0.0625
+epochs: 4
+checkpoint_epochs: [2, 4]
+batch_queries: 512
+learning_rate: 0.00005
+weight_decay: 0.00001
+gradient_clip: 1.0
+temperature: 0.1
+negative_min_distance: 25.0
+negative_topk_each: 32
+auxiliary_gradient_ratio: 0.25
+coefficient_clip: [0.01, 100.0]
+final_score: arc_unique_b100
+promotion:
+  ap_gain_min: 0.001
+  f1_loss_max: 0.001
+  r100_loss_max: 0.001
+  family_ap_loss_max: 0.0025
+test_used: false
