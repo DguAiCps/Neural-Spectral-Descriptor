@@ -1,0 +1,14 @@
+model: main
+classifier_seed: 0
+classifier_epochs: 8
+batch_size: 65536
+learning_rate: 0.001
+weight_decay: 0.0001
+holdout: [kitti/06, helipr/Bridge01]
+arms: [A, B, C_pbev128_main, C_hspec12]
+holdout_query_retention: 0.95
+candidate_count: 30
+selected_count: 10
+positive_distance: 5.0
+negative_distance: 25.0
+test_used: false

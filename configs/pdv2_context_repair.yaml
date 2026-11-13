@@ -1,0 +1,8 @@
+# 최종 성능을 보기 전에 고정하는 검증 1시드 대조다.
+seed: 1
+references: [temporal, A, C]
+graph_arms: [C_top1, C_top3, C_cut, C_message]
+fusion_arms: [C_half_key, C_zero_key]
+threshold_source: results/pdv2_edge_reliability_20261016/summary.json
+threshold_rule: training_holdout_95percent_positive_query_retention
+test_used: false

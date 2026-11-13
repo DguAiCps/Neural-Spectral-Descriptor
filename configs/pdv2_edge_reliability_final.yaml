@@ -1,0 +1,6 @@
+model: main
+reference_arms: [temporal, A, original]
+arms: [B, C, C_selection, alignment, column]
+selected_count: 10
+candidate_count: 30
+test_used: false

@@ -1,0 +1,21 @@
+# 현재 대칭 모델에서 같은 예산으로 실시하는 2x2 추가 학습이다.
+seed: 1
+initial_checkpoint: checkpoints/pdv2_lag15_s1/best_model.pth
+encoder_preset: no_interdiff
+use_gated_context: true
+gate_initial_alpha: 0.0625
+arms: [control, opposite, dropout, combined]
+epochs: 6
+learning_rate: 0.00001
+weight_decay: 0.00001
+batch_size: 1024
+accumulation_steps: 4
+temperature: 0.1
+opposite_fraction: 0.25
+similarity_node_dropout: 0.5
+edge_refresh: each_epoch
+classifier: A_corrected_3d
+shared_coordinate_groups:
+  - [helipr/Bridge01, helipr/Bridge02, helipr/Bridge03, helipr/Bridge04]
+selection: final_epoch_fixed
+test_used: false

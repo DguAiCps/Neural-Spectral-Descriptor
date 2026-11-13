@@ -1,0 +1,17 @@
+# 가중치를 고정하고 둘째 통과의 유사 간선만 제거하는 진단.
+seed: 1
+models:
+  current: diff_full
+  aligned: diff_online
+thresholds:
+  p000: 0.0
+  p025: 0.25
+  p050: 0.5
+  p075: 0.75
+  p090: 0.9
+policies: [p000, p025, p050, p075, p090, random050, temporal, oracle_true]
+selection_policies: [p000, p025, p050, p075, p090]
+probability_bins: [0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.000001]
+random_seed: 1601
+train_diagnostics: true
+test_used: false

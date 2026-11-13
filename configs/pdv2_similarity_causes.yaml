@@ -1,0 +1,14 @@
+model: main
+classifier: xyz
+seed: 1
+random_seed: 1729
+reference_arms: [temporal, xyz]
+interventions:
+  - gt_true_only
+  - gt_nontrue_only
+  - gt_random_matched
+  - cosine_top10
+  - probability_one
+  - raw_key_attributes
+crossed: [temporal, xyz]
+test_used: false

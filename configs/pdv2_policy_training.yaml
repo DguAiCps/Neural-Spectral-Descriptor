@@ -1,0 +1,20 @@
+# 결과 생성 전에 고정하는 학습 정책 × 추론 정책 교차 비교다.
+seed: 1
+initial_checkpoint: results/pdv2_context_repair_training_20261016/opposite/final.pth
+encoder_preset: no_interdiff
+use_gated_context: true
+gate_initial_alpha: 0.0625
+train_policies: [all, top1, classifier_gate]
+eval_policies: [all, temporal, top1, classifier_gate]
+epochs: 6
+learning_rate: 0.00001
+weight_decay: 0.00001
+batch_size: 1024
+accumulation_steps: 4
+temperature: 0.1
+sample_policy: opposite
+edge_refresh: each_epoch
+threshold_source: results/pdv2_context_abstention_20261017/opposite_thresholds.json
+threshold_update: frozen
+selection: final_epoch_fixed
+test_used: false

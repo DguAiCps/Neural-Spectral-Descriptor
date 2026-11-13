@@ -1,0 +1,12 @@
+# 유사 간선 선택·속성의 학습/추론 불일치만 바꾸는 검증 실험.
+seed: 1
+arms: [diff_full, diff_online, diff_temporal]
+checkpoint_epochs: [10, 20]
+epochs: 20
+optimizer_updates: 900
+refresh_every_optimizer_update: true
+feature_workers: 3
+base_training_config: results/pdv2_attention_neighbors_20261015/configs/diff_full.yaml
+control_root: results/pdv2_attention_neighbors_20261015
+sample_source: results/pdv2_matching_mining_20261014/s1/samples
+test_used: false
