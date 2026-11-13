@@ -60,6 +60,16 @@ of the other learned baselines.  official_final is recorded for reference.
 Default training flag in scripts/_pdv2_disco_official_run.sh:
 --fast-hard-negatives (exact k-NN, same output as the official KDTree; speed
 only).
+OPT-IN --c2s-zero-grad (2026-11-09): the official train_one_epoch zeroes only
+the network optimizer (train_DiSCO.py:307) and steps optimizer_c2s (:332) on
+Corr2Softmax gradients accumulated since step 0 (Adam then moves w, b by ~lr
+per step; the default seed-1 run crossed w = 0 in epoch 3).  The flag zeroes
+them after every optimizer_c2s.step() (post-step hook; same parameters as an
+explicit zero_grad() next to :307, selftest `c2s`) and writes to separate
+runs_c2sfix/ and results/pdv2_disco_official_c2sfix/ locations.  Without the
+flag the official behaviour is kept.  OPT-IN --tb-scalars-only skips the
+official per-step add_image calls (3 images per step, 14 GB for 20 epochs);
+scalars, values and RNG are unchanged.
 
 Usage (inside ring_baseline):
   python3 scripts/_disco_official_train.py                 # full run
@@ -96,6 +106,9 @@ from _pdv2_pilot import TRAIN, VAL  # noqa: E402
 RUNS = seeded(WORK / "runs")          # SEED from the environment (default 1)
 SMOKE = seeded(WORK / "smoke")
 SELECTION = RESULTS / "train_selection.json"
+RUNS_C2SFIX = seeded(WORK / "runs_c2sfix")                       # --c2s-zero-grad
+SMOKE_C2SFIX = seeded(WORK / "smoke_c2sfix")
+SELECTION_C2SFIX = seeded(RESULTS.parent / "pdv2_disco_official_c2sfix") / "train_selection.json"
 POS_R, NEG_R = 1.5, 2.0       # generator construct_query_dict (lines 160, 163)
 SKIP, RADIUS = 30, 5.0        # v2 validation (compute_recall_multi_k semantics)
 
@@ -239,6 +252,61 @@ def exact_hard_negatives(T):
     return get_random_hard_negatives
 
 
+def add_c2s_zero_grad(optimizer_c2s):
+    """OPT-IN (--c2s-zero-grad): zero the Corr2Softmax gradients after every
+    optimizer_c2s.step(), the zero_grad() that train_DiSCO.py:307 does only
+    for the network optimizer.  The next backward then sees no gradient, as
+    with an explicit optimizer_c2s.zero_grad() before it (selftest `c2s`)."""
+    return optimizer_c2s.register_step_post_hook(lambda opt, args, kwargs: opt.zero_grad())
+
+
+def queries_state(queries):
+    """Training-dict state that the official loop changes in place: the
+    'positives' lists (shuffled by get_query_tuple) and the cached
+    'negatives' lists of the last queries.  Saved in resume.pth."""
+    return {"positives": [list(dict.__getitem__(queries[k], "positives")) for k in range(len(queries))],
+            "negatives_lru": [(k, list(v)) for k, v in queries._lru.items()]}
+
+
+def load_queries_state(queries, st):
+    assert len(st["positives"]) == len(queries)
+    for k, pos in enumerate(st["positives"]):
+        cur = dict.__getitem__(queries[k], "positives")
+        assert sorted(cur) == sorted(pos), k
+        cur[:] = pos
+    queries._lru = collections.OrderedDict((k, list(v)) for k, v in st["negatives_lru"])
+
+
+class C2STrace:
+    """--trace-c2s (smoke tests only): per optimizer_c2s.step() one JSON line
+    with the Corr2Softmax gradient used by the step, the gradient of the last
+    backward alone (tensor hooks), w, b before the step and a sha256 of all
+    network parameters before the step."""
+
+    def __init__(self, path, model, corr2soft, optimizer_c2s):
+        import hashlib
+        self.f, self.model, self.n = open(path, "a"), model, 0
+        self.params = list(corr2soft.parameters())
+        self.fresh = [None] * len(self.params)
+        for j, p in enumerate(self.params):
+            p.register_hook(lambda g, j=j: self.fresh.__setitem__(j, g.detach().clone()))
+        self._sha = hashlib.sha256
+
+        def pre(opt, args, kwargs):
+            h = self._sha()
+            for q in self.model.parameters():
+                h.update(q.detach().cpu().numpy().tobytes())
+            self.n += 1
+            self.f.write(json.dumps({
+                "step": self.n,
+                "grad": [None if p.grad is None else float(p.grad) for p in self.params],
+                "fresh": [None if g is None else float(g) for g in self.fresh],
+                "w_b": [float(p.detach()) for p in self.params],
+                "net_sha256": h.hexdigest()}) + "\n")
+            self.f.flush()
+        optimizer_c2s.register_step_pre_hook(pre)
+
+
 # ------------------------------------------------------------ validation
 def l2_top1_masked(D, sq, qs, k=8, block=256):
     """Exact float64 Euclidean nearest neighbour of each row q in qs over all
@@ -324,6 +392,10 @@ def train(args, official_argv):
     # initialised here so that the caller's single-GPU choice holds.
     assert torch.cuda.is_available() and torch.cuda.device_count() == 1, \
         "expose exactly one GPU (CUDA_VISIBLE_DEVICES=<id>)"
+    if args.deterministic:   # tests only (resume / trace parity); the training runs do not set it
+        assert os.environ.get("CUBLAS_WORKSPACE_CONFIG"), "set CUBLAS_WORKSPACE_CONFIG=:4096:8"
+        torch.backends.cudnn.deterministic, torch.backends.cudnn.benchmark = True, False
+        torch.use_deterministic_algorithms(True)
     cfg, lp, SC, LF, EV = import_official()
     from tensorboardX import SummaryWriter
     from _pdv2_c3 import _family_pooled
@@ -331,23 +403,26 @@ def train(args, official_argv):
     from _disco_official_prep import check_store
     for role, seqs in (("train", TRAIN), ("val", VAL)):           # input integrity
         for s, q in seqs:
-            r = check_store(role, s, q, n_sample=4)
+            r = check_store(role, s, q, n_sample=args.store_check_samples)
             assert r["ok"], f"polar store failed verification: {r}"
     bank = PolarBank()
     lp.load_pc_file = bank.load                                   # replacement 2
     queries, sizes = build_train(bank, args.smoke)                # replacement 1
-    val_sets = make_val_sets(bank, args.smoke)
+    val_sets = make_val_sets(bank, args.smoke if args.smoke_val is None else args.smoke_val)
     smoke = bool(args.smoke)
-    sel_path = args.selection_out or (SMOKE / "train_selection.json" if smoke else SELECTION)
+    smoke_dir, runs, selection = ((SMOKE_C2SFIX, RUNS_C2SFIX, SELECTION_C2SFIX) if args.c2s_zero_grad
+                                  else (SMOKE, RUNS, SELECTION))
+    sel_path = args.selection_out or (smoke_dir / "train_selection.json" if smoke else selection)
     if args.resume:
         run_dir = Path(args.resume)
         log = run_dir / "log_train.txt"
         if log.exists():   # train_DiSCO.py opens it with 'w' at import
             log.rename(run_dir / f"log_train.before_resume_{datetime.now():%m%d_%H%M%S}.txt")
     else:
-        base = SMOKE / "runs" if smoke else RUNS
+        base = args.runs_dir or (smoke_dir / "runs" if smoke else runs)
         base.mkdir(parents=True, exist_ok=True)
         run_dir = base / datetime.now().strftime("%b%d_%H-%M-%S")
+        assert not run_dir.exists(), run_dir
     T = load_train_module(run_dir, official_argv, queries)
     if args.fast_hard_negatives:
         T.get_random_hard_negatives = exact_hard_negatives(T)
@@ -367,6 +442,8 @@ def train(args, official_argv):
         loss_function = T.SC_loss.triplet_loss
     learning_rate = T.get_learning_rate(0)
     train_writer = SummaryWriter(os.path.join(cfg.LOG_DIR, 'train'))
+    if args.tb_scalars_only:   # opt-in: no per-step images (logging only)
+        train_writer.add_image = lambda *a, **k: None
     model = T.SC.DiSCO(output_dim=cfg.FEATURE_OUTPUT_DIM)
     corr2soft = T.SC.Corr2Softmax(200., 0.)
     model = model.to(T.device)
@@ -375,6 +452,10 @@ def train(args, official_argv):
     assert cfg.OPTIMIZER == 'adam'
     optimizer = torch.optim.Adam(parameters, learning_rate)
     optimizer_c2s = torch.optim.Adam(filter(lambda p: p.requires_grad, corr2soft.parameters()), lr=1e-3)
+    if args.trace_c2s:
+        C2STrace(args.trace_c2s, model, corr2soft, optimizer_c2s)
+    if args.c2s_zero_grad:
+        add_c2s_zero_grad(optimizer_c2s)
 
     record = {"_meta": {
         "official_repo": OFFICIAL_REPO, "official_commit": OFFICIAL_COMMIT,
@@ -385,6 +466,10 @@ def train(args, official_argv):
             "LOSS_LAZY", "TRIPLET_USE_BEST_POSITIVES", "FEATURE_OUTPUT_DIM")},
         "seed": SEED, "smoke": args.smoke, "train_sequences": sizes,
         "fast_hard_negatives": bool(args.fast_hard_negatives),
+        "c2s_zero_grad": bool(args.c2s_zero_grad),
+        "tb_scalars_only": bool(args.tb_scalars_only),
+        "store_check_samples": args.store_check_samples,
+        "deterministic_test_mode": bool(args.deterministic),
         "n_faulty_queries": queries.n_faulty(),
         "val_sequences": [f"{s}/{q}" for s, q, _, _ in val_sets],
         "pools": "per sequence, 3-D positions, positives < 1.5 m, negatives > 2 m",
@@ -409,10 +494,18 @@ def train(args, official_argv):
         np.random.set_state(st["rng"]["numpy"])
         torch.set_rng_state(st["rng"]["torch"])
         torch.cuda.set_rng_state_all(st["rng"]["cuda"])
+        if "queries" in st:        # resume.pth written since 2026-11-09
+            load_queries_state(queries, st["queries"])
+            for p, g in zip(corr2soft.parameters(), st["corr2soft_grad"]):
+                p.grad = None if g is None else g.to(p.device)
         start = st["epoch"] + 1
         record = json.loads(sel_path.read_text())
+        assert record["_meta"].get("c2s_zero_grad", False) == bool(args.c2s_zero_grad), \
+            "--c2s-zero-grad must match the run being resumed"
         record["epochs"] = [e for e in record["epochs"] if e["epoch"] < start]
         record.setdefault("resumed_at_epoch", []).append(start)
+        if "paused" in record:
+            record.setdefault("pause_history", []).append(record.pop("paused"))
         print(f"===> resumed after epoch {st['epoch']}", flush=True)
 
     model = T.nn.DataParallel(model)
@@ -450,7 +543,9 @@ def train(args, official_argv):
               "optimizer_c2s": optimizer_c2s.state_dict(),
               "total_iterations": T.TOTAL_ITERATIONS,
               "latent": T.TRAINING_LATENT_VECTORS, "hard_negatives": T.HARD_NEGATIVES,
-              "rng": _rng_state(torch)}
+              "rng": _rng_state(torch), "queries": queries_state(queries),
+              "corr2soft_grad": [None if p.grad is None else p.grad.detach().cpu()
+                                 for p in corr2soft.parameters()]}
         torch.save(st, run_dir / "resume.tmp")
         os.replace(run_dir / "resume.tmp", run_dir / "resume.pth")
         n_it = T.TOTAL_ITERATIONS - it0
@@ -460,13 +555,24 @@ def train(args, official_argv):
             "per_seq": per, "checkpoint": str(ck), "train_s": round(t_train),
             "trained_queries": n_it, "s_per_query": round(t_train / max(n_it, 1), 4),
             "val_s": round(t_val),
-            "cuda_peak_gb": round(torch.cuda.max_memory_allocated() / 2 ** 30, 2)})
+            "cuda_peak_gb": round(torch.cuda.max_memory_allocated() / 2 ** 30, 2),
+            "corr2soft_w_b": [float(corr2soft.softmax_w), float(corr2soft.softmax_b)]})
         best = max(record["epochs"], key=lambda e: (e["family_macro_r1"], -e["epoch"]))
         record["val_best"] = {"epoch": best["epoch"], "family_macro_r1": best["family_macro_r1"],
                               "checkpoint": best["checkpoint"]}
         _write_json(sel_path, record)
         print(f"===> epoch {epoch}: train {t_train:.0f} s ({n_it} queries), val {t_val:.0f} s, "
               f"family R@1 {eval_recall:.4f}, val-best epoch {best['epoch']}", flush=True)
+        if args.max_compute_hours and epoch + 1 < cfg.MAX_EPOCH and not smoke:
+            used = sum(e["train_s"] + e["val_s"] for e in record["epochs"])
+            if used + t_train + t_val > args.max_compute_hours * 3600:
+                record["paused"] = {"after_epoch": epoch, "compute_s": used,
+                                    "why": "next epoch would exceed --max-compute-hours "
+                                           f"{args.max_compute_hours}; continue with --resume"}
+                _write_json(sel_path, record)
+                train_writer.close()
+                print("DISCO_OFFICIAL_TRAIN_PAUSED", flush=True)
+                sys.exit(3)
 
     train_writer.close()
     official = run_dir / cfg.MODEL_FILENAME
@@ -494,7 +600,7 @@ def _official_construct_query_dict():
     return ns["construct_query_dict"]
 
 
-SELFTEST_PARTS = ("pools", "loop", "recall", "cost")
+SELFTEST_PARTS = ("pools", "loop", "recall", "cost", "c2s")
 
 
 def selftest(args):
@@ -509,6 +615,13 @@ def selftest(args):
     recall: Euclidean R@1 == brute-force sklearn KDTree (official retrieval);
     cost  : CPU time of one official step outside the network on the full
             72,306-key dictionary (python shuffles / set differences / KDTree).
+    c2s   : official train_one_epoch (unchanged) on synthetic polar images,
+            three arms from the same state: official (Corr2Softmax gradient
+            used by step t == sum of the backward gradients 1..t, i.e. never
+            reset), add_c2s_zero_grad (== backward gradient t alone) and an
+            explicit optimizer_c2s.zero_grad() next to train_DiSCO.py:307
+            (network and Corr2Softmax parameters bit-identical to the hook arm
+            after every step); queries_state round trip.
     """
     from _disco_official_prep import fake_gputransform_module
     fake = fake_gputransform_module()
@@ -519,7 +632,7 @@ def selftest(args):
     out = {}
     for part in args.parts:
         {"pools": _check_pools, "loop": _check_loop, "recall": _check_recall,
-         "cost": _check_cost}[part](out, torch, cfg, lp, EV, fake)
+         "cost": _check_cost, "c2s": _check_c2s}[part](out, torch, cfg, lp, EV, fake)
     if args.out_json:
         _write_json(args.out_json, out)
     print("TRAIN_SELFTEST_OK", flush=True)
@@ -695,6 +808,105 @@ def _check_cost(out, torch, cfg, lp, EV, fake):
           flush=True)
 
 
+def _check_c2s(out, torch, cfg, lp, EV, fake):
+    import hashlib
+    from tensorboardX import SummaryWriter
+    n = 26                       # 1 m apart: 2 positives (< 1.5 m), >= 18 negatives (> 2 m)
+    rng = np.random.default_rng(0)
+    imgs = (rng.random((n, 20, 40, 120)) < 0.05).astype(np.float32)
+    X = np.stack([np.arange(n, dtype=np.float64), np.zeros(n), np.zeros(n)], 1)
+    H = rng.uniform(-np.pi, np.pi, n)
+    keys = [f"syn/{i}" for i in range(n)]
+    lp.load_pc_file = lambda fn: imgs[int(fn.rsplit("/", 1)[1])].copy()
+
+    def arm(mode):
+        q = PDV2Queries([], [X], [H], [keys])
+        with tempfile.TemporaryDirectory() as td:
+            T = load_train_module(Path(td), [], q)
+            random.seed(SEED)
+            np.random.seed(SEED)
+            torch.manual_seed(SEED)
+            writer = SummaryWriter(os.path.join(cfg.LOG_DIR, "train"))
+            writer.add_image = lambda *a, **k: None
+            model = T.SC.DiSCO(output_dim=cfg.FEATURE_OUTPUT_DIM)
+            corr2soft = T.SC.Corr2Softmax(200., 0.)
+            opt = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()),
+                                   T.get_learning_rate(0))
+            opt2 = torch.optim.Adam(filter(lambda p: p.requires_grad, corr2soft.parameters()), lr=1e-3)
+            c2s = list(corr2soft.parameters())
+            fresh, used, after = [[] for _ in c2s], [], []
+            for j, p in enumerate(c2s):
+                p.register_hook(lambda g, j=j: fresh[j].append(g.detach().clone()))
+            opt2.register_step_pre_hook(
+                lambda o, a, k: used.append([p.grad.detach().clone() for p in c2s]))
+            if mode == "hook":
+                add_c2s_zero_grad(opt2)
+            elif mode == "explicit":      # optimizer_c2s.zero_grad() next to train_DiSCO.py:307
+                zero_net = opt.zero_grad
+
+                def zero_both(*a, **k):
+                    zero_net(*a, **k)
+                    opt2.zero_grad()
+                opt.zero_grad = zero_both
+
+            def snapshot(o, a, k):
+                h = hashlib.sha256()
+                for p in model.parameters():
+                    h.update(p.detach().numpy().tobytes())
+                after.append({"net": h.hexdigest(), "w_b": [float(p) for p in c2s],
+                              "grad_none": [p.grad is None for p in c2s]})
+            opt2.register_step_post_hook(snapshot)
+            T.train_one_epoch(T.nn.DataParallel(model), opt, corr2soft, opt2, writer,
+                              T.SC_loss.quadruplet_loss, 0)
+            writer.close()
+        rng_end = hashlib.sha256(repr((random.getstate(), np.random.get_state()[1].tolist(),
+                                       torch.get_rng_state().tolist())).encode()).hexdigest()
+        assert len({len(f) for f in fresh}) == 1, [len(f) for f in fresh]
+        fresh = [list(f) for f in zip(*fresh)]          # [step][parameter]
+        return {"fresh": fresh, "used": used, "after": after, "rng_end": rng_end, "queries": q}
+
+    A = {m: arm(m) for m in ("official", "hook", "explicit")}
+    steps = len(A["official"]["used"])
+    assert steps == n - 2 and all(len(A[m]["used"]) == steps for m in A), steps
+    off, hk, ex = A["official"], A["hook"], A["explicit"]
+    # official: the gradient of step t is the running sum of the backward gradients
+    acc = None
+    for t in range(steps):
+        acc = [f.clone() for f in off["fresh"][t]] if acc is None else \
+            [a.add_(f) for a, f in zip(acc, off["fresh"][t])]
+        assert all(torch.equal(u, a) for u, a in zip(off["used"][t], acc)), \
+            (t, off["used"][t], acc, off["fresh"][t])
+    accumulated = sum(not torch.equal(off["used"][t][0], off["fresh"][t][0]) for t in range(steps))
+    assert accumulated == steps - 1, accumulated
+    # hook / explicit: the gradient of step t is the backward gradient t alone
+    for m in (hk, ex):
+        for t in range(steps):
+            assert all(torch.equal(u, f) for u, f in zip(m["used"][t], m["fresh"][t])), t
+    assert all(all(a["grad_none"]) for a in hk["after"])      # cleared right after the step
+
+    def params(a):
+        return a["net"], a["w_b"]
+    assert all(params(a) == params(b) for a, b in zip(hk["after"], ex["after"])), \
+        "hook != explicit zero_grad"
+    assert params(off["after"][0]) == params(hk["after"][0])
+    assert off["after"][-1]["w_b"] != hk["after"][-1]["w_b"]
+    assert off["rng_end"] == hk["rng_end"] == ex["rng_end"]
+    # resume.pth round trip of the in-place shuffled positives / cached negatives
+    st = queries_state(hk["queries"])
+    assert any(p != sorted(p) for p in st["positives"])
+    q2 = PDV2Queries([], [X], [H], [keys])
+    load_queries_state(q2, st)
+    assert queries_state(q2) == st
+    out["c2s_zero_grad"] = {
+        "steps": steps, "official_steps_with_accumulated_grad": accumulated,
+        "official_w_b_end": off["after"][-1]["w_b"], "hook_w_b_end": hk["after"][-1]["w_b"],
+        "official_grad_w_last": float(off["used"][-1][0]),
+        "fresh_grad_w_last_official": float(off["fresh"][-1][0]),
+        "hook_equals_explicit_all_steps": True, "first_step_identical": True,
+        "rng_streams_equal": True, "queries_state_round_trip": True}
+    print(f"  c2s: {json.dumps(out['c2s_zero_grad'])}", flush=True)
+
+
 def store_index(role, sensor, seq):
     """index.npz of a store (scan_ids, poses, heading; no images needed)."""
     from _disco_official_prep import store_dir
@@ -718,10 +930,29 @@ def main():
                     help="first N keyframes of every train/val sequence (GPU timing test)")
     ap.add_argument("--smoke-epochs", type=int, nargs="+", default=[0, 6],
                     help="epoch numbers passed to the official train_one_epoch in smoke mode")
+    ap.add_argument("--smoke-val", type=int, default=None,
+                    help="smoke mode: first N keyframes of every val sequence (default --smoke; "
+                         "0 = full sequences, which have revisit queries)")
     ap.add_argument("--resume", default="", help="run dir to continue (needs resume.pth)")
     ap.add_argument("--fast-hard-negatives", action="store_true",
                     help="opt-in exact brute-force k-NN in place of the per-step KDTree "
                          "of get_random_hard_negatives (same indices; not the default)")
+    ap.add_argument("--c2s-zero-grad", action="store_true",
+                    help="opt-in zero_grad of optimizer_c2s after every step (the official "
+                         "loop accumulates the Corr2Softmax gradients); separate run/result dirs")
+    ap.add_argument("--tb-scalars-only", action="store_true",
+                    help="opt-in: skip the per-step tensorboard images of the official loop")
+    ap.add_argument("--max-compute-hours", type=float, default=0.0,
+                    help="stop at an epoch end (resume.pth written, exit 3) when the next "
+                         "epoch would exceed this train+val time of the run")
+    ap.add_argument("--trace-c2s", type=Path, default=None,
+                    help="smoke tests: per-step Corr2Softmax gradient / w, b / network hash")
+    ap.add_argument("--runs-dir", type=Path, default=None, help="parent of the new run dir")
+    ap.add_argument("--deterministic", action="store_true",
+                    help="tests only: deterministic cuDNN / torch algorithms (bitwise resume checks)")
+    ap.add_argument("--store-check-samples", type=int, default=4,
+                    help="rows per polar store recomputed from the raw scans at start "
+                         "(0: failure-signature rows only, when the raw scans are absent)")
     ap.add_argument("--selection-out", type=Path, default=None)
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--parts", nargs="+", choices=SELFTEST_PARTS, default=list(SELFTEST_PARTS),
