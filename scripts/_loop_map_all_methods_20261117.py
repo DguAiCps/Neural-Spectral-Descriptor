@@ -49,7 +49,7 @@ def ledgers():
     return out
 
 
-def main():
+def main(show=ORDER, W=6.9, ncol=6, nrow=2, stem="loop_map_all_Town03"):
     pos = np.load(ROOT / f"results/pdv2_loop_map_20261117/positions/{NAME}.npz")["pos"][:, :2]
     with np.load(C.DIRS / f"{NAME}.npz") as d:
         q, grp = d["query_idx"], d["group"]
@@ -76,19 +76,22 @@ def main():
     xy = (pos - pos.min(0))[:, ::-1] * np.array([1, -1])  # Codex 단일 열 판과 같은 90° 회전(가로로 긴 배치)
     xy -= xy.min(0)
     span = xy.max(0)
-    W, ncol, nrow, gap, mx = 6.9, 6, 2, .035, .04  # 인치: 그림 폭, 칸 사이, 칸 안 여백 비율
+    gap, mx = .035, .04  # 인치: 칸 사이, 칸 안 여백 비율
+    cells = nrow * ncol
+    strip = .0 if cells > len(show) else .17  # 범례 칸이 없으면 아래 띠에 범례
     cw = (W - gap * (ncol - 1)) / ncol
     ch = cw * span[1] / span[0] + .24  # 지도 + 위(이름)·아래(수치) 글줄
-    H = nrow * ch + gap * (nrow - 1)
+    H = nrow * ch + gap * (nrow - 1) + strip
     fig = plt.figure(figsize=(W, H))
     axes = []
     for i in range(nrow * ncol):
         r, c = divmod(i, ncol)
         axes.append(fig.add_axes([(c * (cw + gap)) / W, 1 - ((r + 1) * ch + r * gap) / H, cw / W, ch / H]))
+    axes = axes[:len(show) + (1 if cells > len(show) else 0)]
     pad_x = span[0] * mx
     sx = (span[0] + 2 * pad_x)  # 칸 폭에 맞춘 데이터 폭
     sy = sx * ch / cw  # 같은 축척의 칸 높이
-    for a, m in zip(axes, ORDER):
+    for a, m in zip(axes, show):
         p, acc = res[m]
         a.set_xlim(-pad_x, span[0] + pad_x)
         y_mid = span[1] / 2
@@ -103,21 +106,30 @@ def main():
         a.text(.03, .955, LABEL[m], transform=a.transAxes, ha="left", va="top", fontsize=7.0, fontweight="bold" if m == "nsd" else "normal")
         a.text(.97, .035, f"F {f:.1f}  R {rv:.1f}", transform=a.transAxes, ha="right", va="bottom", fontsize=6.0)
         a.set_xticks([]); a.set_yticks([])
-    leg = axes[-1]
-    for sp in leg.spines.values():
-        sp.set_visible(False)
-    leg.set_xticks([]); leg.set_yticks([])
-    leg.set_xlim(axes[0].get_xlim()); leg.set_ylim(axes[0].get_ylim())
     h = [plt.Line2D([], [], ls="", marker="o", ms=2.5, color=FWD, label="Accepted (F)"),
          plt.Line2D([], [], ls="", marker="o", ms=2.5, color=REV, label="Accepted (R)"),
          plt.Line2D([], [], ls="", marker="o", ms=2.5, color=MISS, label="Missed"),
          plt.Line2D([], [], color=TRACK, lw=1.2, label="Trajectory")]
-    leg.legend(handles=h, frameon=False, fontsize=6.0, loc="upper left", handletextpad=.2, borderaxespad=.1, labelspacing=.3)
-    x0, y0 = span[0] * .05, leg.get_ylim()[0] + .12 * sy
-    leg.plot([x0, x0 + 200], [y0, y0], color=INK, lw=.8)
-    leg.text(x0 + 220, y0, "200 m", ha="left", va="center", fontsize=6.8)
+    if cells > len(show):
+        leg = axes[-1]
+        for sp in leg.spines.values():
+            sp.set_visible(False)
+        leg.set_xticks([]); leg.set_yticks([])
+        leg.set_xlim(axes[0].get_xlim()); leg.set_ylim(axes[0].get_ylim())
+        leg.legend(handles=h, frameon=False, fontsize=6.0, loc="upper left", handletextpad=.2, borderaxespad=.1, labelspacing=.3)
+        x0, y0 = span[0] * .05, leg.get_ylim()[0] + .12 * sy
+        leg.plot([x0, x0 + 200], [y0, y0], color=INK, lw=.8)
+        leg.text(x0 + 220, y0, "200 m", ha="left", va="center", fontsize=6.8)
+    else:
+        fig.legend(handles=h, frameon=False, fontsize=6.0, loc="lower left", ncol=4, handletextpad=.1, columnspacing=.5, handlelength=1.2,
+                   bbox_to_anchor=(0, 0), borderaxespad=.1)
+        sb = fig.add_axes([1 - cw / W, 0, cw / W, strip / H])
+        sb.axis("off"); sb.set_xlim(axes[0].get_xlim()); sb.set_ylim(0, 1)
+        x1 = axes[0].get_xlim()[1] - span[0] * .01
+        sb.plot([x1 - 200, x1], [.5, .5], color=INK, lw=.8)
+        sb.text(x1 - 220, .5, "200 m", ha="right", va="center", fontsize=6.0)
     for ext in ("pdf", "png"):
-        fig.savefig(OUT / f"loop_map_all_Town03.{ext}", dpi=400)
+        fig.savefig(OUT / f"{stem}.{ext}", dpi=400)
     print("size", round(W, 2), round(H, 2))
     for m in ORDER:
         print(m, counts[m])
@@ -125,3 +137,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # 한 단 축소판: 주 결과표 AP 상위 비교 방법 3개(BEVPlace++ 89.85, DeepRING 78.60, RING#-L 73.42) + NSD, 규칙 고정 후 그림
+    main(show=["ringsharp", "deepring", "bevplace", "nsd"], W=3.3, ncol=2, nrow=2, stem="loop_map_compact_Town03")
