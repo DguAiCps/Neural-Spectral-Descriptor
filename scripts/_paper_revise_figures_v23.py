@@ -36,7 +36,7 @@ A, P, M, MC = (("{%s}" % NS[k]) for k in ("a", "p", "m", "mc"))
 BOLD = {c: chr(0x1D482 + ord(c) - ord("a")) for c in "abcdefghijklmnopqrstuvwxyz"}
 ITAL = {c: chr(0x1D44E + ord(c) - ord("a")) for c in "abcdefghijklmnopqrstuvwxyz"}
 ITAL["h"] = "ℎ"
-ALPHA, ETA, TILDE, STAR = "\U0001D6FC", "\U0001D702", "̃", "⋆"
+ALPHA, ETA, TILDE, STAR = "\U0001D6FC", "\U0001D702", "̃", "∗"
 
 
 def xp(el, expr):

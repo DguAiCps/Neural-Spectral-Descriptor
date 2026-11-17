@@ -7,6 +7,8 @@ import re
 import statistics
 from pathlib import Path
 
+from _paper_baseline_reader_fragments import write_baseline_reader_fragments
+
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "results/pdv2_baseline_common_diagnosis_20261106"
 # root 검산(2026-11-08): SeqOT 저자 저장 예측을 공개 원시·저자 자세로 다시 만든 overlap>0.3 정답으로 다시 채점한 진단.
@@ -565,6 +567,10 @@ def main() -> None:
         values = [float(row[k]) for k in ("AP", "R@1", "retrieval_loss", "ranking_loss")]
         assert abs(values[0] + values[2] + values[3] - 100) < 1e-9
         return name.replace("#", r"\#") + " & " + " & ".join(f"{v:.2f}" for v in values) + r" \\"
+    # 2026-11-13: 표2의 FreSCo(학습 없는 1회, 46원장) 행을 채택 요약에서 같은 식으로 만들어 SC++ 다음에 둔다.
+    # FreSCo 원장은 공통 진단 원천(966원장)에 없으므로 문장의 원장 수는 그대로 두고 출처를 따로 적는다.
+    ap, r1 = (100 * deepring_summary["methods"]["fresco"]["mean_std"][k]["mean"] for k in ("AP", "R@1"))
+    fresco_row = {"method": "FreSCo", "AP": ap, "R@1": r1, "retrieval_loss": 100 - r1, "ranking_loss": r1 - ap}
     lines, diagnostics = [], []
     for row in rows:
         if row["method"] == "RING++":
@@ -573,12 +579,14 @@ def main() -> None:
             diagnostics.append(line(row, DIAGNOSTIC_ROW[row["method"]]))
         elif row["method"] not in MAIN_ROW:
             lines.append(line(row, row["method"]))
+            if row["method"] == "SC++":
+                lines.append(line(fresco_row, "FreSCo"))
     lines += [r"\midrule"] + diagnostics
     template = r"""% 원천: results/pdv2_baseline_common_diagnosis_20261106/
 \subsection{Common-benchmark and training-signal diagnostics}
 \label{app:baseline_signal}
 \paragraph{Retrieval and acceptance ranking.}
-We recompute all main metrics from @LEDGERS@ frozen baseline ledgers, including the 46 released-kernel RING++ ledgers, and from the 46 exact-maximum RING++ ledgers for each correlation normalization. The RING++ row uses the unit-variance implementation of Table~\ref{tab:results}; the two rows below the rule are the released-normalization diagnostics of Table~\ref{tab:ringpp_maximum}. The SeqOT and DeepRING rows use the paper-recipe and scale-initialized ledgers of Table~\ref{tab:results}, respectively. For fixed returned places, revisit R@1 is the upper bound on AP under perfect acceptance ranking. Thus $100-\mathrm{AP}=(100-\mathrm{R@1})+(\mathrm{R@1}-\mathrm{AP})$, with percentages on both sides. Table~\ref{tab:baseline_loss_decomposition} separates retrieval failures from the remaining ranking gap using the same city and seed averaging as the main table. This is a descriptive decomposition, not an estimate of performance recoverable by retraining. Monotone score calibration cannot change AP.
+We recompute all main metrics from @LEDGERS@ frozen baseline ledgers, including the 46 released-kernel RING++ ledgers, and from the 46 exact-maximum RING++ ledgers for each correlation normalization. The FreSCo row uses the 46 ledgers of Table~\ref{tab:results}. The RING++ row uses the unit-variance implementation of Table~\ref{tab:results}; the two rows below the rule are the released-normalization diagnostics of Table~\ref{tab:ringpp_maximum}. The SeqOT and DeepRING rows use the paper-recipe and scale-initialized ledgers of Table~\ref{tab:results}, respectively. For fixed returned places, revisit R@1 is the upper bound on AP under perfect acceptance ranking. Thus $100-\mathrm{AP}=(100-\mathrm{R@1})+(\mathrm{R@1}-\mathrm{AP})$, with percentages on both sides. Table~\ref{tab:baseline_loss_decomposition} separates retrieval failures from the remaining ranking gap using the same city and seed averaging as the main table. This is a descriptive decomposition, not an estimate of performance recoverable by retraining. Monotone score calibration cannot change AP.
 
 \begin{table}[t]
 \centering\footnotesize\setlength{\tabcolsep}{3pt}
@@ -631,6 +639,7 @@ Condition & AP & Max F1 & R@100P & R@1 \\
     (PAPER / "baseline_common_diagnostics.tex").write_text(content)
     published_appendix()
     sampler_appendix()
+    write_baseline_reader_fragments(PAPER)
     print(f"부록 공통 진단 생성: 분해{len(lines)}행, 원장{ledger_count:,}개, 회전 대조3행")
 
 
@@ -814,4 +823,9 @@ Two bounded four-epoch SeqOT pilots, a degenerate-overlap guard and KITTI/HeLiPR
 
 
 if __name__ == "__main__":
+    import argparse
+    _parser = argparse.ArgumentParser(description=__doc__)
+    # 출력 원고 폴더만 바꾸는 옵션(2026-11-17, body_v2.4). 기본은 그대로 body_v2.3이다.
+    _parser.add_argument("--paper-dir", type=Path, default=PAPER)
+    PAPER = _parser.parse_args().paper_dir
     main()

@@ -607,7 +607,7 @@ def baseline_variant_table(output: Path, baseline: dict) -> list:
     """표2의 RING++·SeqOT·FreSCo·DeepRING과 공개 코드 변형·이전 구성의 공통 시험 결과를 부록 표로 쓴다.
 
     모든 행은 표2와 같은 공통 시험 집계(195,726질의, 6도시 매크로, 학습 방법은 시드 평균·표본 SD)다.
-    묶음마다 마지막 행이 표2 행이며, 표2와 같은 값·같은 표기여야 한다.
+    묶음마다 첫 행이 표2 행이며, 표2와 같은 값·같은 표기여야 한다.
     """
     records = SEQOT / "server_mirror/records/summary.json"
     assert digest(COMMON_BASELINES) == ADOPTED_SEQOT["common_sha256"] and digest(records) == ADOPTED_SEQOT["records_sha256"]
@@ -632,30 +632,36 @@ def baseline_variant_table(output: Path, baseline: dict) -> list:
             ("Released-code training recipe", entry(common["methods"]["seqot"]["mean_std"])),
             (r"Table~\ref{tab:results}: paper recipe + log-domain GeM", entry(read(records)["mean_std"]))]),
         ("fresco", "FreSCo", [
-            ("Before KITTI preprocessing regression fix", entry(prefix["methods"]["fresco"]["mean_std"])),
+            ("Released KITTI preprocessing", entry(prefix["methods"]["fresco"]["mean_std"])),
             (r"Table~\ref{tab:results}: KITTI regression fixed", entry(baseline["methods"]["fresco"]["mean_std"]))]),
         ("deepring", "DeepRING", [
-            (r"Earlier $W_0=1$ initialization", entry(baseline["deepring_scaleinit_replacement"]["previous_deepring_entry"]["mean_std"])),
+            (r"$W_0=1$ run settings", entry(baseline["deepring_scaleinit_replacement"]["previous_deepring_entry"]["mean_std"])),
             (r"Table~\ref{tab:results}: $W_0=1/s$", entry(baseline["methods"]["deepring"]["mean_std"]))]),
     )
     rows = []
     for g, (key, method, configs) in enumerate(groups):
+        configs = [configs[-1]] + configs[:-1]
         if g:
             rows.append(r"\midrule")
         for i, (config, (mean, sd)) in enumerate(configs):
             rows.append((method if not i else "") + f" & {config} & "
                         + " & ".join(value_cell(mean[k], sd[k]) for k in METRICS) + r" \\")
         # 표2 행은 table2_results.tex와 같은 값·같은 표기(순위 표시 제외)다.
-        mean, sd = configs[-1][1]
+        mean, sd = configs[0][1]
         table2 = baseline["methods"][key]["mean_std"]
         assert all(abs(mean[k] - table2[k]["mean"]) < 1e-12 for k in METRICS)
         assert ([value_cell(mean[k], sd[k]) for k in METRICS]
                 == [value_cell(table2[k]["mean"], table2[k]["std"]) for k in METRICS]), key
-    (output / "appdx_baseline_variants.tex").write_text(table(
+    rendered = table(
         r"Implementation and training variants on the common test (\%). Learned methods report mean $\pm$ sample SD across three runs; "
-        r"training-free methods report one run. The released RING++ kernel is nondeterministic.",
+        r"training-free methods report one run. The first row of each block is used in Table~\ref{tab:results}; "
+        r"the other RING++ rows use the released normalization. DeepRING rows use our reimplementation. "
+        r"The released RING++ kernel is nondeterministic.",
         "tab:baseline_release_comparison",
-        r"Method & Configuration & AP & Max F1 & R@100P & \shortstack{Revisit\\R@1}", rows, "llrrrr", wide=True))
+        r"Method & Configuration & AP & Max F1 & R@100P & \shortstack{Revisit\\R@1}", rows, "llrrrr", wide=True)
+    rendered = rendered.replace(r"\label{tab:baseline_release_comparison}",
+                                r"\label{tab:baseline_release_comparison}\label{tab:ringpp_maximum}")
+    (output / "appdx_baseline_variants.tex").write_text(rendered)
     return [COMMON_BASELINES, RINGPP_MAXFIX, records, FRESCO_PREFIX, DEEPRING_SUMMARY]
 
 
@@ -948,7 +954,7 @@ def generate(output: Path) -> dict:
         rows.append(label + " & " + " & ".join(value_cell(summary["mean"][kind][k], sd[k])
                     for k in METRICS) + r" \\")
     (output / "appdx_stage2_controls.tex").write_text(table(
-        r"Stage-2 controls. Every row keeps the indexes, candidate union, fusion weights, and scoring rule, and recomputes alignment, the returned place, and acceptance. Learned rows start from the same pretrained weights and identical initial outputs; $^\dagger$the pointwise gate starts from a separately pretrained model without message passing. Values in \%; trained variants report mean $\pm$ SD across three starts.",
+        r"Stage-2 controls. Every row keeps the indexes, candidate union, fusion weights, and scoring rule, and recomputes alignment, the returned place, and acceptance. Learned rows start from the same pretrained weights and identical initial outputs; $^\dagger$the pointwise gate starts from a separately pretrained model without message passing. Values in \%; trained variants report mean $\pm$ SD across three seeds.",
         "tab:stage2_controls", r"Variant & AP & Max F1 & R@100P & \shortstack{Revisit\\R@1}", rows, compact=True))
 
     adopted_costs = {"ringpp": ringpp_i2_costs, "seqot": seqot_costs}
@@ -985,7 +991,12 @@ def generate(output: Path) -> dict:
         fields.pop(name)
     ranking = [sorted({v[i] for v in fields.values()}) for i in range(4)]
     rows = []
-    for name in (*NAMES, "nsd"):
+    # 본문 표2만 학습 없는 방법, 학습 방법, NSD 순으로 묶는다.
+    table2_order = ("scpp", "fresco", "ring", "ringpp", "disco", "deepring",
+                    "ringsharp", "helios", "seqot", "bevplace", "nsd")
+    for name in table2_order:
+        if name in ("disco", "nsd"):
+            rows.append(r"\midrule")
         values = [accuracy[name]]
         if name in COST_PENDING:
             rows.append(labels[name] + " & " + " & ".join(values + ["--"] * 4) + r" \\")
@@ -1038,7 +1049,8 @@ def generate(output: Path) -> dict:
         stale.unlink()
     (output / "table2_results.tex").write_text(table(
         r"\textbf{Recognition performance and cost.} Recognition uses six-city macro means over the 46 test sequences; learned models report mean $\pm$ SD across three runs. "
-        r"Cost is measured on Sejong01 with 10,000 initial eligible candidates. Bold marks the best values; underlining marks the second best.",
+        r"Cost is measured on Sejong01 with 10,000 initial eligible candidates. Training-free baselines precede learned baselines. "
+        r"Bold marks the best values; underlining marks the second best.",
         r"tab:results}\label{tab:efficiency",
         r"& \multicolumn{4}{c}{Recognition (\%)} & \multicolumn{4}{c}{Cost} \\ \cmidrule(lr){2-5}\cmidrule(l){6-9}"
         r"Method & AP & Max F1 & R@100P & \shortstack{Revisit\\R@1} & \shortstack{Resident memory\\(KB/frame)} & \shortstack{Update\\(ms)} & \shortstack{Query\\(ms)} & \shortstack{Total\\(ms)}",
@@ -1154,8 +1166,8 @@ def generate(output: Path) -> dict:
     stage_rows = [
         (r"\textbf{NSD}", summary["mean"]["diff"], summary["std"]["diff"]),
         (r"\emph{Place indexing}", None, None),
-        ("No BEV magnitude index", index["mean"]["key_200"], index["std"]["key_200"]),
-        ("No spectral key index", index["mean"]["aux_200"], index["std"]["aux_200"]),
+        ("Spectral-only proposals", index["mean"]["key_200"], index["std"]["key_200"]),
+        ("BEV-only proposals", index["mean"]["aux_200"], index["std"]["aux_200"]),
         (r"\emph{Temporal spectrum refining}", None, None),
         ("No temporal spectrum refining", summary["mean"]["identity"], dict.fromkeys(METRICS)),
         ("Uniform subtraction", summary["mean"]["fixed"], dict.fromkeys(METRICS)),
@@ -1173,7 +1185,7 @@ def generate(output: Path) -> dict:
              r"\raggedright " + label + " & " + " & ".join(value_cell(mean[k], sd[k]) for k in METRICS) + r" \\")
             for label, mean, sd in stage_rows]
     (output / "table4_components.tex").write_text(table(
-        r"\textbf{Component ablation.} Rows change one component of the trained NSD; DiffAttnConv learning and Past-only NSD are trained separately. Values are in \%; trained variants report mean $\pm$ SD across three starts.",
+        r"\textbf{Component ablation.} Inference ablations and training controls. DiffAttnConv learning and Past-only NSD are trained separately. Values are in \%; trained variants report mean $\pm$ SD across three seeds.",
         "tab:online_components", r"Variant & AP & Max F1 & R@100P & \shortstack{Revisit\\R@1}", rows, "p{83.5pt}cccc", compact=True))
 
     # 부록: 크기 점수만 쓸 때의 반환 오류 분해(사용자 지시 2026-11-10). 표4 '정렬 재점수 제거'와 표2 NSD 원장에서 직접 계산한다.
@@ -1194,6 +1206,10 @@ def generate(output: Path) -> dict:
 
     direction_sources = direction_tables(output, summary)
 
+    from _paper_temporal_tables_v23 import generate as generate_temporal_tables
+    temporal_source = ROOT / "docs/paper/body_v2.3/temporal_source.json"
+    generate_temporal_tables(temporal_source, output, "tables_v3")
+
     sources = [CURRENT / (n + ".json") for n in
                ("protocol", "summary", "integrated_report", "integrated_validation")]
     sources += [BASELINES, EFFICIENCY, CURRENT_EFFICIENCY, cost_protocol, Path(__file__)] + seqot_sources + seqot_cost_sources + ringpp_sources
@@ -1203,6 +1219,7 @@ def generate(output: Path) -> dict:
     sources += direction_sources + dataset_sources + variant_sources + threshold_sources + geography_sources
     sources += [MACRO / "summary.json", MACRO / "protocol.json"]
     sources += [ROOT / "scripts/_pdv2_aliasing_decomposition.py"]
+    sources += [temporal_source, ROOT / "scripts/_paper_temporal_tables_v23.py"]
     sources += [MAPSIZE / f"nsd_n{n}_window.json" for n in (1000, 5000, 10000)] + [MAPSIZE / "protocol_window.json"]
     manifest = {"model": "diff", "policy": "matching_only", "queries": 195726,
                 "aggregation": summary["aggregation"], "table3_nsd": "measured_diff_s1_window", "table3_nsd_adoption": ADOPTED_COST,
