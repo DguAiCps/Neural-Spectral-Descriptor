@@ -109,6 +109,7 @@ COST_PENDING = ()
 EFFICIENCY = ROOT / "results/pdv2_table3_20261029/summary.json"
 CURRENT_EFFICIENCY = ROOT / "results/pdv2_contrast_table3_opt_20261106/nsd_n10000_window.json"
 INDEX_BUDGET = ROOT / "results/pdv2_contrast_index_budget_20261106"
+FREQ_SWEEP = ROOT / "results/freq_count_sweep_20261122/summary.json"
 DIRECTION = ROOT / "results/pdv2_review_direction_yaw_20261105"
 MACRO = ROOT / "results/pdv2_macro_ablation_20261106"
 MAPSIZE = ROOT / "results/pdv2_contrast_table3_mapsize_20261106"
@@ -625,8 +626,10 @@ def dataset_table(output: Path, summary: dict, baseline: dict) -> list:
         assert {k: v for k, v in new["datasets"][family].items() if k != "methods"} == {k: v for k, v in d.items() if k != "methods"}
         assert all(new["datasets"][family]["methods"][m] == d["methods"][m] for m in d["methods"] if m != "nsd")
     src = new
-    order = (*NAMES, "nsd")
-    # 행 순서는 표2와 같다.
+    # 행 순서는 본문 표2와 같다(학습 없는 방법, 학습 방법, NSD).
+    order = ("scpp", "fresco", "ring", "ringpp", "disco", "deepring",
+             "ringsharp", "helios", "seqot", "bevplace", "nsd")
+    assert set(order) == {*NAMES, "nsd"}
     assert set(src["order"]) == set(order) and len(src["order"]) == 11 and "imlpr" not in src["order"]
     for name in NAMES:
         assert src["seeds"][name] == baseline["methods"][name]["seeds"]
@@ -644,21 +647,22 @@ def dataset_table(output: Path, summary: dict, baseline: dict) -> list:
     def label(name: str) -> str:
         return r"\textbf{NSD}" if name == "nsd" else NAMES[name].split("~")[0]
 
-    def head(a: str, b: str) -> str:
+    def head(a: str, b: str, c: str) -> str:
         cells = []
-        for family in (a, b):
+        for family in (a, b, c):
             d = src["datasets"][family]
             cells.append(rf"\multicolumn{{4}}{{c}}{{{d['label']} ({len(d['positive_sequences'])}/{len(d['sequences'])})}}")
-        return (" & " + " & ".join(cells) + r" \\ \cmidrule(lr){2-5}\cmidrule(l){6-9}"
-                + r"Method & AP & Max F1 & R@100P & R@1 & AP & Max F1 & R@100P & R@1")
+        return (" & " + " & ".join(cells) + r" \\ \cmidrule(lr){2-5}\cmidrule(lr){6-9}\cmidrule(l){10-13}"
+                + r"Method & AP & Max F1 & R@100P & R@1 & AP & Max F1 & R@100P & R@1 & AP & Max F1 & R@100P & R@1")
 
     rows = []
-    pairs = (("kitti", "kitti360"), ("helipr", "mulran"), ("nclt", "mcd"))
-    for p, (a, b) in enumerate(pairs):
+    # 데이터셋 3개씩 두 블록으로 놓는다.
+    blocks = (("kitti", "kitti360", "helipr"), ("mulran", "nclt", "mcd"))
+    for p, block in enumerate(blocks):
         if p:
-            rows.append(r"\midrule" + head(a, b) + r" \\" + "\n" + r"\midrule")
+            rows.append(r"\midrule" + head(*block) + r" \\" + "\n" + r"\midrule")
         cells = {name: [] for name in order}
-        for family in (a, b):
+        for family in block:
             methods = src["datasets"][family]["methods"]
             for k in METRICS:
                 shown = {name: round(100 * methods[name][k]["mean"], 2) for name in order}
@@ -669,7 +673,7 @@ def dataset_table(output: Path, summary: dict, baseline: dict) -> list:
     (output / "appdx_datasets.tex").write_text(table(
         r"Final performance by dataset (\%). Parentheses: sequences with positives/total sequences. Learned methods report mean $\pm$ SD "
         r"across three runs. Bold/underlined: best/second best within each dataset.",
-        "tab:dataset_current", head(*pairs[0]), rows, "lcccccccc", wide=True, compact=True))
+        "tab:dataset_current", head(*blocks[0]), rows, "l" + "c" * 12, wide=True, compact=True))
     return [DATASET_METHODS, REPORT / "analysis/main/dataset_methods_summary.json"]
 
 
@@ -703,10 +707,7 @@ def baseline_variant_table(output: Path, baseline: dict) -> list:
             (r"Table~\ref{tab:results}: paper recipe + log-domain GeM", entry(read(records)["mean_std"]))]),
         ("fresco", "FreSCo", [
             ("Released KITTI preprocessing", entry(prefix["methods"]["fresco"]["mean_std"])),
-            (r"Table~\ref{tab:results}: KITTI regression fixed", entry(baseline["methods"]["fresco"]["mean_std"]))]),
-        ("deepring", "DeepRING", [
-            (r"$W_0=1$ run settings", entry(baseline["deepring_scaleinit_replacement"]["previous_deepring_entry"]["mean_std"])),
-            (r"Table~\ref{tab:results}: $W_0=1/s$", entry(baseline["methods"]["deepring"]["mean_std"]))]),
+            (r"Table~\ref{tab:results}: KITTI ground removal as in the paper", entry(baseline["methods"]["fresco"]["mean_std"]))]),
     )
     rows = []
     for g, (key, method, configs) in enumerate(groups):
@@ -723,10 +724,8 @@ def baseline_variant_table(output: Path, baseline: dict) -> list:
         assert ([value_cell(mean[k], sd[k]) for k in METRICS]
                 == [value_cell(table2[k]["mean"], table2[k]["std"]) for k in METRICS]), key
     rendered = table(
-        r"Implementation and training variants on the common test (\%). Learned methods report mean $\pm$ sample SD across three runs; "
-        r"training-free methods report one run. The first row of each block is used in Table~\ref{tab:results}; "
-        r"the other RING++ rows use the released normalization. DeepRING rows use our reimplementation. "
-        r"The released RING++ kernel is nondeterministic.",
+        r"Implementation and training variants on the common query set (\%). Learned methods report mean $\pm$ sample SD across three runs; "
+        r"training-free methods report one run.",
         "tab:baseline_release_comparison",
         r"Method & Configuration & AP & Max F1 & R@100P & \shortstack{Revisit\\R@1}", rows, "llrrrr", wide=True)
     rendered = rendered.replace(r"\label{tab:baseline_release_comparison}",
@@ -780,7 +779,7 @@ def threshold_tables(output: Path, summary: dict) -> list:
         return rows
 
     (output / "appdx_fixed_threshold.tex").write_text(table(
-        r"\textbf{Validation-fixed thresholds.} One acceptance threshold per method and run is selected on validation "
+        r"\textbf{Validation-selected thresholds.} One acceptance threshold per method and run is selected on validation "
         r"and applied unchanged to all test sequences. Means over three runs; city recall $\pm$ SD.",
         "tab:fixed_threshold_current",
         r"Point & Method & \shortstack{Val.\\prec./rec.} & \shortstack{City\\recall} & \shortstack{Pooled\\recall} & "
@@ -828,8 +827,8 @@ def threshold_tables(output: Path, summary: dict) -> list:
         rows.append(" & ".join(cells) + r" \\")
     (output / "appdx_matched_false_accepts.tex").write_text(table(
         r"\textbf{Matched false-accept budgets.} One acceptance threshold per method and run is applied to all 46 test sequences "
-        r"and set to the lowest value whose pooled false accepts do not exceed the budget. Means over three runs; city recall $\pm$ SD. "
-        r"The last column is the city-recall difference (NSD minus BEVPlace++, points) with a paired 95\% interval that reselects the threshold in each resample."
+        r"and set to the lowest value whose pooled false accepts do not exceed the budget. Means over three runs; recall in \%, city recall $\pm$ SD; TP is the number of correctly accepted revisit queries pooled over all sequences. "
+        r"The last column is the city-recall difference (NSD minus BEVPlace++, points) with a paired 95\% interval."
         + "".join(" " + rv(rf"$^\ast$One NSD run stops at {min(v)} false accepts because the next threshold would admit a group of tied scores beyond the budget; "
                            rf"the NSD mean is {mean:.2f} false accepts.") for k, v, mean in short),
         "tab:matched_false_accepts",
@@ -892,7 +891,7 @@ def geography_tables(output: Path) -> list:
                      f"{s['measured_min_dist_m'] / 1000:.2f} & {bounded} & {bound} & {city} & {int(s['geographic_min_lower_bound_km'] // 1):,}" + r" \\")
     (output / "appdx_split_geo.tex").write_text(table(
         r"Cross-split geographic audit over unordered sequence pairs. Measured: trajectory distances in a common frame (reg.: after registration "
-        r"onto MulRan). Bounded and city level: conditional lower bounds, not trajectory measurements.", "tab:split_geo",
+        r"onto MulRan). Bounded and city level: conditional lower bounds.", "tab:split_geo",
         r"& & \multicolumn{3}{c}{Measured} & \multicolumn{2}{c}{Bounded} & \multicolumn{2}{c}{City level} \\ "
         r"\cmidrule(lr){3-5}\cmidrule(lr){6-7}\cmidrule(l){8-9}"
         r"Split pair & Pairs & $n$ (reg.) & \shortstack{Within\\50\,m (\%)} & \shortstack{Min.\\dist. (km)} & $n$ & \shortstack{Bound\\(km)} & $n$ & \shortstack{Bound\\(km)}",
@@ -942,21 +941,18 @@ def direction_tables(output: Path, summary: dict) -> list:
         "tab:direction", r"Group & Method & AP & Max F1 & R@100P & \shortstack{Revisit\\R@1}", rows, "llcccc", compact=True))
 
     rows = []
-    # 학습 차이 행은 NSD − 균등 감산만 남긴다(DiffAttnConv 학습 대조는 폐기). 세 재표집 절차를 같은 행 묶음에 둔다.
+    # 학습 차이 행은 NSD − 균등 감산만 남긴다(DiffAttnConv 학습 대조는 폐기). 두 재표집 절차를 같은 행 묶음에 둔다.
     for group, label in (("all", "All"), ("forward_only", "Forward-only"), ("reverse_only", "Reverse-only")):
         r = src["sequence"]["comparisons"]["diff-fixed"][group]["overall"]
-        rows.append(f"{label} & NSD & Sequences & " + " & ".join(interval_cell(r[k]) for k in METRICS) + r" \\")
-        for name, proc in (("Seq.\\ + blocks", "block"), ("Blocks, 6 cities", "six")):
-            r = src["block"]["comparisons"]["diff-fixed"][group][proc]["overall"]
-            rows.append(f"{label} & NSD & {name} & " + " & ".join(interval_cell(r[k]) for k in METRICS) + r" \\")
-    kept = [src["block"]["comparisons"]["diff-fixed"][g]["six"]["complete_city_replicates"] for g in ("all", "forward_only", "reverse_only")]
+        rows.append(f"{label} & Sequences & " + " & ".join(interval_cell(r[k]) for k in METRICS) + r" \\")
+        r = src["block"]["comparisons"]["diff-fixed"][group]["block"]["overall"]
+        rows.append(f"{label} & Seq.\\ + blocks & " + " & ".join(interval_cell(r[k]) for k in METRICS) + r" \\")
     (output / "appdx_direction_intervals.tex").write_text(table(
-        r"Differences from uniform subtraction by traversal direction, with conditional 95\% intervals (percentage points). Sequence intervals use 10,000 resamples of "
+        r"NSD minus uniform subtraction by traversal direction, with paired 95\% intervals (percentage points). Sequence intervals use 10,000 resamples of "
         r"sequences with positives within cities, as in Table~\ref{tab:paired_current}. Block intervals use 2,000 resamples of all sequences in a city "
-        r"and circular blocks of 100 consecutive queries, which also changes the sampled population and the handling of zero-positive strata. "
-        rf"Six-city rows keep only replicates with positives in all six cities ({kept[0]:,}, {kept[1]:,}, and {kept[2]:,} for all, forward-only, "
-        r"and reverse-only queries). Point estimates are the original six-city means.",
-        "tab:direction_intervals", r"Group & Model & Resampling & AP & Max F1 & R@100P & Revisit R@1", rows, "lllcccc", wide=True, compact=True))
+        r"and circular blocks of 100 consecutive queries, which also changes the sampled population and the handling of groups without positives. "
+        r"Point estimates are the original six-city means.",
+        "tab:direction_intervals", r"Group & Resampling & AP & Max F1 & R@100P & Revisit R@1", rows, "llcccc", wide=True, compact=True))
 
     rows = []
     for angle, result in src["yaw"]["final_recognition"].items():
@@ -964,9 +960,8 @@ def direction_tables(output: Path, summary: dict) -> list:
         rows.append(f"${float(angle):g}^\\circ$ & " + " & ".join(value_cell(result["mean_std"][k]["mean"]) for k in METRICS)
                     + f" & {100 * p['winner_agreement'] / p['queries']:.2f}" + r" \\")
     (output / "appdx_yaw.tex").write_text(table(
-        rf"Raw-point rotation of {src['yaw']['counts']['queries']:,} fixed queries (64 per sequence) with three " + rv("seeds") + r" (\%). "
-        r"Gallery features and candidate-side temporal context stay fixed, so rotation changes coordinates rather than creating a new "
-        r"reverse-view observation. Same returned place is measured over 8,832 query--" + rv("seed") + r" pairs per angle. The sample does not replace full-query accuracy.",
+        rf"Query yaw rotation of {src['yaw']['counts']['queries']:,} fixed queries (64 per sequence) with three " + rv("seeds") + r" (\%). "
+        r"Because only this subset is evaluated, the $0^\circ$ row differs from Table~\ref{tab:results}. Gallery features and candidate-side temporal context stay fixed. Same returned place is measured over 8,832 query--" + rv("seed") + r" pairs per angle.",
         "tab:yaw", r"Yaw & AP & Max F1 & R@100P & \shortstack{Revisit\\R@1} & \shortstack{Same\\returned\\place}", rows, "rccccc", compact=True))
 
     def magnitude(v: float) -> str:
@@ -1164,7 +1159,7 @@ def bev_temporal_table(output: Path, summary: dict) -> list:
             f"{signed2(v['delta_pp'][m])} [{signed2(v['conditional_95_pp'][m][0])}, {signed2(v['conditional_95_pp'][m][1])}]" for m in metrics) + r" \\")
     (output / "appdx_bev_temporal.tex").write_text(r"""% scripts/_paper_tables_v24.py가 results/pdv2_report_model_20261116/analysis/bev_temporal/highprec.json에서 생성한다. 숫자를 직접 고치지 않는다.
 \begin{table*}[t]
-\caption{BEVPlace++ with distance-matched temporal evidence (TE) (\%); the lower rows are paired differences with conditional 95\% intervals (percentage points).}\label{tab:bev_temporal}
+\caption{BEVPlace++ with distance-matched temporal evidence (TE) (\%); the lower rows are paired differences with 95\% intervals (percentage points). R@95P and R@99P: recall at 95\% and 99\% precision.}\label{tab:bev_temporal}
 \centering\footnotesize\setlength{\tabcolsep}{2pt}
 \sbox0{%
 \begin{tabular}{@{}p{130pt}cccccc@{}}\toprule
@@ -1195,6 +1190,25 @@ def gate_table(output: Path) -> tuple:
         assert len(inner) == 1
         text = text.replace(r"\caption{\rev{" + inner[0] + "}}", r"\caption{" + inner[0] + "}", 1)
     assert r"\rev{" not in text.split("% ----", 1)[0]
+    # 원고 정리(2026-11-20): 초안 머리 주석·뒤 문단 초안을 빼고, ‡행(표준화 입력 변형)과 캡션의 ‡ 설명을 뺀다.
+    text = text.split("% ----", 1)[0].rstrip("\n") + "\n"
+    head, body = text.split(r"\begin{table}", 1)
+    assert head.startswith("% 초안(단위 G")
+    text = "% 원천: results/pdv2_report_model_20261116/analysis/gate/gate_table.json 의 rows_main.\n" + r"\begin{table}" + body
+    footnote = (r"; $^\ddagger$additionally uses standardized $\log(1+\cdot)$ input, batch normalization with estimated statistics, "
+                r"learning rate $3\times10^{-4}$, and 1,536 updates.")
+    assert text.count(footnote) == 1
+    text = text.replace(footnote, ".")
+    # 원고(v2.7)의 캡션 문구에 맞춘다.
+    for old, new in (("fixed retrieval policy, scoring rule, and test queries; learned rows are trained from scratch with the same objective and samples and report",
+                      "fixed candidate retrieval, scoring rule, and test queries; trained variants report"),
+                     (r"median per-scan contrast strength over all test scans (step 1 / step 2)",
+                      r"median per-keyframe contrast strength over all test keyframes (first / second refining step)")):
+        assert text.count(old) == 1
+        text = text.replace(old, new)
+    lines = text.splitlines(keepends=True)
+    assert sum(line.startswith(r"Learned gate$^\ddagger$") for line in lines) == 1
+    text = "".join(line for line in lines if not line.startswith(r"Learned gate$^\ddagger$"))
     (output / "appdx_gate_learning.tex").write_text(text)
     return [draft], "included"
 
@@ -1282,32 +1296,32 @@ def generate(output: Path) -> dict:
     scaled["fresco"] = fresco_costs
     scaled["nsd"] = nsd_scaled
     scale_rows = []
-    for name in (*NAMES, "nsd"):
+    for name in table2_order:
         if name in COST_PENDING:
-            scale_rows.append(labels[name].split("~")[0] + " & " + " & ".join(["--"] * 7) + r" \\")
+            scale_rows.append(labels[name].split("~")[0] + " & " + " & ".join(["--"] * 6) + r" \\")
             continue
         runs = [scaled[name][n] for n in (1000, 5000, 10000)]
-        update = [r["timings_ms"]["update"]["mean"] for r in runs]
-        cells = [f"{sum(update) / 3:.2f} [{min(update):.2f}, {max(update):.2f}]"]
-        cells += [f"{r['timings_ms']['query']['mean']:.2f}" for r in runs]
+        cells = [f"{r['timings_ms']['query']['mean']:.2f}" for r in runs]
         cells += [f"{r['resident_bytes']['total'] / 1e6:.2f}" for r in runs]
         scale_rows.append(labels[name].split("~")[0] + " & " + " & ".join(cells) + r" \\")
     (output / "appdx_cost_scaling.tex").write_text(table(
-        r"Cost versus initial gallery size $N$ on Sejong01 (96 arrivals, three repetitions). Update time is summarized as the mean [min, max] across the three workloads. "
-        r"NSD values come from one session; its $N{=}10{,}000$ run differs from Table~\ref{tab:efficiency} by "
+        r"Cost versus the number $N$ of initial eligible candidates on MulRan Sejong01 (96 timed keyframes, three repetitions). "
+        r"NSD values come from one session; its $N{=}10{,}000$ run takes "
+        + rv(f"{scaled['nsd'][10000]['timings_ms']['processing']['mean']:.2f}") + r"\,ms in total, "
         + rv(f"{abs(100 * (scaled['nsd'][10000]['timings_ms']['processing']['mean'] / measured['timings_ms']['processing']['mean'] - 1)):.1f}")
-        + r"\% in processing time with identical resident memory.",
+        + (r"\% below the " if scaled['nsd'][10000]['timings_ms']['processing']['mean'] < measured['timings_ms']['processing']['mean'] else r"\% above the ") + rv(f"{measured['timings_ms']['processing']['mean']:.2f}")
+        + r"\,ms of Table~\ref{tab:efficiency}, with identical resident memory.",
         "tab:cost_scaling",
-        r"& & \multicolumn{3}{c}{Query (ms)} & \multicolumn{3}{c}{Resident memory (MB)} \\ \cmidrule(lr){3-5}\cmidrule(l){6-8}"
-        r"Method & Update (ms) & 1k & 5k & 10k & 1k & 5k & 10k",
-        scale_rows, "lccccccc", wide=True))
+        r"& \multicolumn{3}{c}{Query (ms)} & \multicolumn{3}{c}{Resident memory (MB)} \\ \cmidrule(lr){2-4}\cmidrule(l){5-7}"
+        r"Method & 1k & 5k & 10k & 1k & 5k & 10k",
+        scale_rows, "lcccccc"))
 
     stale = output / "table3_efficiency.tex"
     if stale.exists():
         stale.unlink()
     (output / "table2_results.tex").write_text(table(
         r"\textbf{Recognition performance and cost.} Recognition uses six-city macro means over the 46 test sequences; learned models report mean $\pm$ SD across three runs. "
-        r"Cost is measured on Sejong01 with 10,000 initial eligible candidates. Training-free baselines precede learned baselines. "
+        r"Cost is measured on MulRan Sejong01 with 10,000 initial eligible candidates. Training-free baselines precede learned baselines. "
         r"Bold marks the best values; underlining marks the second best.",
         r"tab:results}\label{tab:efficiency",
         r"& \multicolumn{4}{c}{Recognition (\%)} & \multicolumn{4}{c}{Cost} \\ \cmidrule(lr){2-5}\cmidrule(l){6-9}"
@@ -1319,8 +1333,8 @@ def generate(output: Path) -> dict:
     assert macro["status"] == "passed" and macro["queries_per_case"] == 195726 and macro["test_used_for_selection"] is False
     assert macro["model"]["seeds"] == list(NSD_SEEDS) and macro["bootstrap"]["replicates"] == 10000
     comparisons = (
-        ("NSD minus no temporal spectrum refining", refining["comparisons"]["diff-identity"]["all"]["overall"]),
-        ("NSD minus uniform", {k: {"delta_pp": report["comparisons"]["diff-fixed"]["delta_pp"][k],
+        ("NSD minus no refining", refining["comparisons"]["diff-identity"]["all"]["overall"]),
+        ("NSD minus uniform subtraction", {k: {"delta_pp": report["comparisons"]["diff-fixed"]["delta_pp"][k],
                                    "ci95_pp": report["comparisons"]["diff-fixed"]["conditional_95_pp"][k]} for k in METRICS}),
         ("NSD minus BEVPlace++", {k: {"delta_pp": report["comparisons"]["diff-bev_native"]["delta_pp"][k],
                                       "ci95_pp": report["comparisons"]["diff-bev_native"]["conditional_95_pp"][k]} for k in METRICS}),
@@ -1336,7 +1350,7 @@ def generate(output: Path) -> dict:
     # 두 자릿수 차이(정렬 재점수 제거)로 숫자 열이 넓어져, 열 간격 2pt와 이름 열 90pt(긴 이름은 두 줄)로 축소를 피한다.
     rows = [r"\raggedright " + r for r in rows]
     (output / "appdx_intervals.tex").write_text(table(
-        "Paired differences and conditional 95\\% intervals (percentage points).",
+        "Paired differences and 95\\% intervals (percentage points).",
         "tab:paired_current", "Comparison & AP & Max F1 & R@100P & Revisit R@1", rows, "p{90pt}cccc", wide=True, compact=True))
 
     rows = []
@@ -1360,7 +1374,7 @@ def generate(output: Path) -> dict:
                                            for i in NSD_SEEDS) for k in METRICS}
         assert all(abs(vals[k] - direct[k]) < 1e-9 for k in METRICS)
         rows.append(label + " & " + " & ".join(signed(vals[k]) for k in METRICS) + r" \\")
-    rows.append(r"\multicolumn{5}{@{}l}{\emph{NSD minus no temporal spectrum refining}} \\")
+    rows.append(r"\multicolumn{5}{@{}l}{\emph{NSD minus no refining}} \\")
     for city, label in cities.items():
         vals = {k: 100 * statistics.mean(summary["per_case"][f"diff_s{i}"]["groups"][city][k] - refining["per_case"]["identity"]["groups"][city][k]
                                          for i in NSD_SEEDS) for k in METRICS}
@@ -1368,7 +1382,7 @@ def generate(output: Path) -> dict:
         assert all(abs(vals[k] - ref[k]) < 1e-9 for k in METRICS)
         rows.append(label + " & " + " & ".join(signed(vals[k]) for k in METRICS) + r" \\")
     (output / "appdx_learning_city.tex").write_text(table(
-        "Paired differences by city (percentage points): " + rv("NSD") + " minus uniform subtraction, and NSD minus no temporal spectrum refining.",
+        "Paired differences by city (percentage points): " + rv("NSD") + " minus uniform subtraction, and NSD minus no refining.",
         "tab:learning_city", "City & AP & Max F1 & R@100P & Revisit R@1", rows))
 
     dataset_sources = dataset_table(output, summary, baseline)
@@ -1384,11 +1398,11 @@ def generate(output: Path) -> dict:
     assert index_check["queries"] == 195726 and index_check["ledgers"] == 690
     assert index_check["exact_matched_counts"] and index_check["original_winners_exact"] and index["checks"]["dual_winners_equal_nsd"]
     index_labels = {
-        "key_200": "Spectral key, top-200",
-        "aux_200": "BEV magnitude, top-200",
+        "key_200": "Spectral-only, top-200",
+        "aux_200": "BEV-only, top-200",
         "dual_100_100": "Dual index, top-100 + top-100 (NSD)",
-        "key_matched": r"Spectral key, top-$K_q$",
-        "aux_matched": r"BEV magnitude, top-$K_q$",
+        "key_matched": r"Spectral-only, top-$K_q$",
+        "aux_matched": r"BEV-only, top-$K_q$",
     }
     rows = []
     for arm, label in index_labels.items():
@@ -1404,6 +1418,25 @@ def generate(output: Path) -> dict:
         r"Candidate-retrieval ablation. Candidate recall and final metrics are in \%; final metrics use the Table~\ref{tab:results} aggregation and three " + rv("seeds") + ".",
         "tab:index_budget", r"Proposal source & Mean $|\mathcal C_q|$ & Candidate recall & AP & Max F1 & R@100P & Revisit R@1",
         rows, "lrrrrrr", wide=True))
+
+    # 저장 주파수 수 K 대 성능(2026-11-22). 학습은 보고 모델과 같은 GPU 종류, K = 8 행은 보고 모델 그대로다.
+    freq = read(FREQ_SWEEP)["pro6000_retrain"]
+    assert freq["gate"]["passed"]
+    freq_storage = read(FREQ_SWEEP)["K"]
+    freq_keys = ("AP", "max_F1", "R@100P", "R@1")
+    for a, b in zip(freq_keys, METRICS):
+        assert abs(freq["K"]["8"]["full_method"]["percent"][a]["mean"] - 100 * summary["mean"]["diff"][b]) < 1e-9
+        assert abs(freq["K"]["8"]["full_method"]["percent"][a]["sd"] - 100 * summary["std"]["diff"][b]) < 1e-9
+    rows = []
+    for k in ("4", "8", "12", "16"):
+        pct = freq["K"][k]["full_method"]["percent"]
+        cells = [f'{freq_storage[k]["storage"]["bytes"]:,}']
+        cells += [value_cell(pct[a]["mean"] / 100, pct[a]["sd"] / 100) for a in freq_keys]
+        rows.append(k + " & " + " & ".join(cells) + r" \\")
+    (output / "appdx_freq_count.tex").write_text(table(
+        r"Recognition versus the number $K$ of stored frequencies (\%, mean $\pm$ SD over three runs). Storage is per place in float32. The $K{=}8$ row is NSD in Table~\ref{tab:results}.",
+        "tab:freq_count", r"$K$ & Storage (B) & AP & Max F1 & R@100P & Revisit R@1",
+        rows, "rrrrrr"))
 
     # 표4: 단계별 거시 대조. 체크포인트·융합 가중치·점수 척도는 고정하고 한 단계씩 바꾼다(2026-11-06).
     for k in METRICS:
@@ -1428,11 +1461,14 @@ def generate(output: Path) -> dict:
     ]
     # 이름 열을 83.5pt로 고정해 가장 긴 이름(101pt)만 두 줄로 접고 숫자는 축소 없이 8pt를 유지한다(나머지 이름 최대 83.2pt).
     # 단계 묶음 사이에 가로선을 둔다(사용자 지시 2026-11-06).
+    # 원고(v2.7)에 맞춰 표2처럼 전체 행에서 1·2위를 굵은 글씨·밑줄로 표시한다.
+    stage_rankings = {k: sorted({mean[k] for _, mean, _ in stage_rows if mean is not None}, reverse=True) for k in METRICS}
     rows = [(rf"\midrule\multicolumn{{5}}{{@{{}}l}}{{{label}}} \\" if mean is None else
-             r"\raggedright " + label + " & " + " & ".join(value_cell(mean[k], sd[k]) for k in METRICS) + r" \\")
+             r"\raggedright " + label + " & " + " & ".join(value_cell(mean[k], sd[k], stage_rankings[k].index(mean[k])) for k in METRICS) + r" \\")
             for label, mean, sd in stage_rows]
     (output / "table4_components.tex").write_text(table(
-        r"\textbf{Component ablation.} Inference ablations and training controls. " + rv("Past-only NSD is trained separately") + r". Values are in \%; trained variants report mean $\pm$ SD across three " + rv("seeds") + ".",
+        r"\textbf{Component ablation.} Inference ablations and training controls. " + rv("Past-only NSD is trained separately") + r". Values are in \%; trained variants report mean $\pm$ SD across three " + rv("seeds") + ". "
+        r"Bold marks the best values; underlining marks the second best.",
         "tab:online_components", r"Variant & AP & Max F1 & R@100P & \shortstack{Revisit\\R@1}", rows, "p{83.5pt}cccc", compact=True))
 
     # 부록: 크기 점수만 쓸 때의 반환 오류 분해(사용자 지시 2026-11-10). 새 융합의 정렬 재점수 제거 원장과 NSD 시드 4~6 원장에서 계산했다.
@@ -1447,13 +1483,16 @@ def generate(output: Path) -> dict:
                     "ann_arbor": "Ann Arbor", "stockholm": "Stockholm", "hamburg": "Hamburg"}
     for k in alias_keys:
         assert abs(statistics.mean(aliasing[c][k] for c in alias_cities) - aliasing["macro"][k]) < 1e-9
-    rows = [label + " & " + " & ".join(f"{aliasing[c][k]:.2f}" for k in alias_keys) + r" \\"
+    # 표에는 먼 오류 두 열만 싣는다. 5 m 넘는 오류율의 도시 매크로는 위 검산대로 1 − Revisit R@1(절제표 tab:online_components)과 같다.
+    shown_keys = ("magnitude_distant", "nsd_distant")
+    rows = [label + " & " + " & ".join(f"{aliasing[c][k]:.2f}" for k in shown_keys) + r" \\"
             for c, label in alias_cities.items()]
-    rows.append(r"\midrule City macro & " + " & ".join(f"{aliasing['macro'][k]:.2f}" for k in alias_keys) + r" \\")
+    rows.append(r"\midrule City macro & " + " & ".join(f"{aliasing['macro'][k]:.2f}" for k in shown_keys) + r" \\")
     (output / "appdx_aliasing.tex").write_text(table(
-        r"Returned-place errors among revisit queries (\%). \emph{Magnitude scores only} returns the place with the two index scores, as in the no-alignment row of Table~\ref{tab:online_components}; NSD adds alignment re-ranking. An error returns a place more than 5\,m from the query, and a distant error one at least 25\,m away. Rates average the revisit-bearing sequences of each city, then the three " + rv("seeds") + ".",
-        "tab:aliasing", r"& \multicolumn{2}{c}{Magnitude scores only} & \multicolumn{2}{c}{NSD} \\ \cmidrule(lr){2-3}\cmidrule(lr){4-5} City & Error & Distant error & Error & Distant error",
-        rows, "lcccc"))
+        r"Aliased matches (\%) among revisit queries: returned places more than 25\,m from the query. Rates average each city's sequences, then three " + rv("seeds") + r". "
+        r"\emph{No alignment re-ranking} uses only the two index scores (Table~\ref{tab:online_components}).",
+        "tab:aliasing", r"City & No alignment re-ranking & NSD",
+        rows, "lcc"))
 
     direction_sources = direction_tables(output, summary)
     bev_sources = bev_temporal_table(output, summary)
@@ -1474,6 +1513,7 @@ def generate(output: Path) -> dict:
     sources += fresco_sources + ringpp_i2_sources + deepring_sources
     sources += [index_path, index_check_path, REPORT / "ablations/macro_summary.json", REPORT / "analysis/main/city.json", alias_path]
     sources += direction_sources + dataset_sources + variant_sources + threshold_sources + geography_sources + bev_sources + gate_sources
+    sources += [FREQ_SWEEP]
     sources += [temporal_source, window_path, selection_path, extra_path, ROOT / "scripts/_paper_temporal_tables_v24.py",
                 ROOT / "scripts/_report_model_tables_extra_20261116.py"]
     sources = list(dict.fromkeys(sources))

@@ -17,6 +17,7 @@
 
 - **언어**: 문서와 설명은 한국어로 쓴다. 위키 문체와 형식은 `docs/AGENTS.md`를 따른다.
 - **Git**: 커밋은 요청받았을 때만 한다. 작성자는 Kimun-Park 한 명이며 `Co-Authored-By` 줄을 넣지 않는다.
+- **원고**: CVPR 본문은 마감이 끝나 고칠 수 없다(2026-11-21 기준). `docs/paper/body_v2.7/`에서 부록(`cvpr2027_supplement_body.tex`와 그것이 `\input` 하는 파일)만 고친다. 본문 `cvpr2027_body.tex`, 본문 표·그림은 건드리지 않으며, 본문의 문제는 부록에서 보완할 수 있는지로 판단한다.
 - **학습 필수 옵션**: `train_multi_dataset.py`로 학습할 때 `--encoder-preset no_interdiff --use-gated-context --gate-initial-alpha 0.0625`를 붙인다. 빠지면 현재 구성이 아닌 옛 인코더 설정으로 학습된다.
 - **실행 위치**: GPU 작업(학습, 캐시 생성, 평가)은 도커 컨테이너 `ring_baseline` 안에서 돌린다. 호스트 파이썬에는 torch가 없다. 자세한 내용은 `docs/실행 환경.md`.
 - **장소 분리**: 학습·검증·시험은 서로 장소가 겹치면 안 된다(다른 분할과 50 m 안 비율 1% 이하, 겹치는 시퀀스는 한 분할에). 새 데이터는 `scripts/split_audit/geo_audit.py`로 먼저 확인한다. 규칙 전문은 `docs/결정과 근거.md`.

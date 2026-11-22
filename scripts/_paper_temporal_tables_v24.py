@@ -6,7 +6,7 @@ temporal_source.json(schema 2)을 다시 쓰고, generate()가 그 파일만 읽
 
 남기는 행(사용자 결정 2026-11-16): 학습 없는 균등 감산 대조(대칭, 앞 5·뒤 5의 같은 세기/선택 세기, 정제 없음+양방향 수락),
 대칭 NSD, Past-only NSD(과거 10), 과거 10 균등 감산, 정제 없음+과거 5 수락. 사전학습 기반 학습 변형은 모두 뺀다.
-narratives(원고 문단)는 손대지 않고 기존 temporal_source.json의 것을 그대로 옮긴다(문장 수정은 원고 단위가 한다).
+narratives(원고 문단)는 기존 temporal_source.json의 것을 옮기고, 원고에서 고친 문장(NARRATIVE_FIXES)만 적용한다.
 """
 from pathlib import Path
 from decimal import Decimal
@@ -17,6 +17,45 @@ from typing import Any, Callable, Dict, List, Optional
 
 GROUPS = (("all", "Overall"), ("forward_only", "Forward"), ("reverse_only", "Reverse"))
 ROOT = Path(__file__).resolve().parents[1]
+# 원고(v2.7) temporal_controls.tex에서 고친 문장. build()가 옮기는 narratives에 적용한다(이미 고친 원천이면 그대로 둔다).
+NARRATIVE_FIXES = {
+    'window_setup': (('two-sided temporal acceptance are shared', 'two-sided temporal evidence are shared'),
+                     ('Validation AP selects each one-sided strength from $\\{-0.125,-0.25,-0.5,-1\\}$: $-0.125$ for the preceding window (80.69\\%) and $-0.25$ for the following window (80.97\\%), versus 83.34\\% for the symmetric window at $-0.5$.',
+                      'The one-sided strengths are set empirically: $-0.125$ for the preceding window and $-0.25$ for the following window.'),
+                     # 조건표를 결과표에 합치고(2026-11-21) 부록의 방향별 표(tab:direction)는 본문 방향 표로 대신한다.
+                     (r'Table~\ref{tab:temporal_window_controls} distinguishes the refining, acceptance, and training conditions. Tables~\ref{tab:temporal_window_results} and~\ref{tab:temporal_window_deltas} give test values and paired differences',
+                      r'Table~\ref{tab:temporal_window_results} lists the refining, acceptance, and training conditions with test values, and Table~\ref{tab:temporal_window_deltas} gives paired differences'),
+                     (r'Direction groups follow Table~\ref{tab:direction}.', r'Direction groups follow Table~\ref{tab:direction_all}.'),
+                     # 2026-11-22 구성 변경: 같은 세기 대조와 줄인 세기 대조를 문단으로 나눈다(세기 문장과 역방향 설명은 window_readout으로).
+                     (' The one-sided strengths are set empirically: $-0.125$ for the preceding window and $-0.25$ for the following window.', ''),
+                     (', including the equal-strength controls at $-0.5$', ''),
+                     (' On a reverse revisit, one-sided windows contrast the query and stored place against opposite sides of the road.', '')),
+    'window_readout': ((r' and a median of 14.69\,m of travel', ''),
+                       ('Selecting the preceding strength on validation narrows the reverse-only gap',
+                        'At its own strength of $-0.125$, the preceding window narrows the reverse-only gap'),
+                       ('The equal-strength preceding window has', 'At the same strength of $-0.5$, the preceding window has'),
+                       ('the following window shows the same direction asymmetry. At its own strength of $-0.125$, the preceding window narrows',
+                        'the following window shows the same direction asymmetry. On a reverse revisit, one-sided windows contrast the query and '
+                        'stored place against opposite sides of the road.\n\nWe also evaluate each one-sided window at a reduced strength, set '
+                        'empirically to $-0.125$ for the preceding window and $-0.25$ for the following window. The preceding window then narrows'),
+                       ('stays close to no refining. Symmetric NSD uses', 'stays close to no refining.\n\nSymmetric NSD uses')),
+    'zero_setup': ((r", matching NSD's per-layer neighbor count", ''),
+                   ('Following the rule of twice the maximum temporal offset, the candidate-side correspondence radius is 20 keyframes, increased from 10.',
+                    'As in NSD, the candidate-side correspondence radius is twice the maximum temporal offset, which gives 20 keyframes instead of 10.'),
+                   (' Query-side acceptance also uses ten preceding keyframes.', ''),
+                   ('the 75:25 mixture are shared with NSD; the mean center weight',
+                    r'the mixing weight $\lambda$ are shared with NSD; the mean weight of the center pair'),
+                   ('for query-side acceptance. These three configurations use no keyframes after the query.',
+                    'for query-side temporal evidence.'),
+                   (r'\paragraph{Zero-lag configurations.}', r'\paragraph{Past-only configurations.}')),
+    'zero_readout': (('than symmetric NSD.\n\n',
+                      'than symmetric NSD. Among the zero-lag configurations, the training-free configuration without refining has the highest '
+                      'AP and R@100P over all revisits. Past-only NSD is 0.66 AP points below past-only uniform subtraction ($[-1.02, -0.31]$), '
+                      'while the R@100P interval includes zero ($-0.25$ $[-1.72, 1.23]$). The gains from refining and learning reported for NSD therefore '
+                      'hold for the symmetric window.\n\n'),
+                     ('Among the zero-lag configurations', 'Among the past-only configurations'),
+                     ('therefore hold for the symmetric window.', 'are therefore specific to the symmetric window.')),
+}
 
 
 def normalized(item: Dict[str, Any]) -> Dict[str, str]:
@@ -48,29 +87,21 @@ def start_table(caption: str, label: str) -> List[str]:
 
 
 def absolute_header() -> List[str]:
-    """전체·순방향·역방향 지표 열을 만든다."""
-    return [r'\begin{tabular}{@{}lcccccc@{}}\toprule',
-            r'Variant & \multicolumn{2}{c}{Overall} & \multicolumn{2}{c}{Forward-only} & \multicolumn{2}{c}{Reverse-only} \\',
-            r'\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}',
-            r' & AP & R@100P & AP & R@100P & AP & R@100P \\ \midrule']
+    """조건(세기·수락·지연) 열과 전체·순방향·역방향 지표 열을 만든다."""
+    return [r'\begin{tabular}{@{}lclccccccc@{}}\toprule',
+            r'Variant & Strength & Acceptance & Lag & \multicolumn{2}{c}{Overall} & \multicolumn{2}{c}{Forward-only} & \multicolumn{2}{c}{Reverse-only} \\',
+            r'\cmidrule(lr){5-6}\cmidrule(lr){7-8}\cmidrule(lr){9-10}',
+            r' & & & & AP & R@100P & AP & R@100P & AP & R@100P \\ \midrule']
 
 
-def absolute_row(row: Dict[str, Any]) -> str:
-    """절대 성능 한 행을 만든다."""
-    parts = [row['label']]
+def absolute_row(row: Dict[str, Any], condition: Dict[str, Any]) -> str:
+    """조건과 절대 성능 한 행을 만든다."""
+    assert condition['acceptance'] and condition['lag']
+    parts = [row['label'], condition['strength'] or 'n/a', condition['acceptance'], condition['lag']]
     for g in ('overall', 'forward', 'reverse'):
         for m in ('AP', 'R100'):
             parts.append(cell(row['metrics'].get(g + '_' + m)))
     return ' & '.join(parts) + r' \\'
-
-
-def stack_cell(item: Optional[Dict[str, Any]]) -> str:
-    """차이와 신뢰구간을 두 줄로 조판한다."""
-    if item is None:
-        return r'\textemdash'
-    d = normalized(item)
-    return (r'$\vcenter{\hbox{\shortstack{$' + d['estimate'] + r'$\\'
-            r'{\scriptsize $[' + d['lower'] + ', ' + d['upper'] + r']$}}}}$')
 
 
 def comparison_rows(rows: List[Dict[str, Any]], metric: str) -> Dict[str, Any]:
@@ -93,9 +124,13 @@ def _difference(delta: float, ci: List[float], source: Dict[str, Any]) -> Dict[s
 
 
 def build(path: Path, summary: dict, controls: dict, window: dict, selection: dict, extra: dict, paths: Dict[str, Path]) -> dict:
-    """결과 JSON에서 temporal_source.json(schema 2)을 다시 쓴다. narratives는 기존 파일의 것을 그대로 둔다."""
+    """결과 JSON에서 temporal_source.json(schema 2)을 다시 쓴다. narratives는 기존 파일의 것에 NARRATIVE_FIXES만 적용한다."""
     previous = json.loads(path.read_text())
     narratives = previous['narratives']
+    for item in narratives:
+        for old, new in NARRATIVE_FIXES.get(item['id'], ()):
+            assert old in item['tex'] or new in item['tex'], (item['id'], old)
+            item['tex'] = item['tex'].replace(old, new, 1)
     sel = selection['selected']
     assert selection['test_used'] is False and window['test_used_for_selection'] is False and window['status'] == 'passed'
     assert sel == window['selection']['selected'] and window['arms']['past_selected'] == f"past_{str(-sel['past']).replace('.', 'p')}"
@@ -111,13 +146,14 @@ def build(path: Path, summary: dict, controls: dict, window: dict, selection: di
             if g == 'all':
                 assert abs(nsd - summary['mean']['diff'][k]) < 1e-12
     pre, fol = '$-5,\\ldots,-1$', '$+1,\\ldots,+5$'
+    # Lag는 원고 temporal_source.json(2026-11-18 원고에서 고친 조건)을 따른다: 질의 뒤에 필요한 최대 키프레임 수.
     conditions = [
-        dict(label='Symmetric uniform', window='$\\pm1,\\ldots,\\pm5$', scope='None', strength='$-0.5$', acceptance='Two-sided', lag=None, group='training_free'),
+        dict(label='Symmetric uniform', window='$\\pm1,\\ldots,\\pm5$', scope='None', strength='$-0.5$', acceptance='Two-sided', lag='$15$', group='training_free'),
         dict(label='Preceding five, equal', window=pre, scope='None', strength='$-0.5$', acceptance='Two-sided', lag='$5$', group='training_free'),
         dict(label='Preceding five, selected', window=pre, scope='None', strength=strength(sel['past']), acceptance='Two-sided', lag='$5$', group='training_free'),
-        dict(label='Following five, equal', window=fol, scope='None', strength='$-0.5$', acceptance='Two-sided', lag=None, group='training_free'),
-        dict(label='Following five, selected', window=fol, scope='None', strength=strength(sel['future']), acceptance='Two-sided', lag=None, group='training_free'),
-        dict(label='No refining, two-sided acceptance', window='None', scope='None', strength=None, acceptance='Two-sided', lag=None, group='training_free'),
+        dict(label='Following five, equal', window=fol, scope='None', strength='$-0.5$', acceptance='Two-sided', lag='$15$', group='training_free'),
+        dict(label='Following five, selected', window=fol, scope='None', strength=strength(sel['future']), acceptance='Two-sided', lag='$15$', group='training_free'),
+        dict(label='No refining, two-sided acceptance', window='None', scope='None', strength=None, acceptance='Two-sided', lag='$5$', group='training_free'),
         # 새 보고모델은 대비 세기를 −0.5로 고정해 학습한다(게이트 고정).
         dict(label='Symmetric NSD', window='$\\pm1,\\ldots,\\pm5$', scope='Full', strength='$-0.5$', acceptance='Two-sided', lag='$15$', group='learned'),
         dict(label='Past-only NSD', window='$-10,\\ldots,-1$', scope='Full', strength='$-0.5$', acceptance='Preceding ten', lag='$0$', group='zero_lag'),
@@ -206,8 +242,8 @@ def generate(source: Path, out: Path, prefix: str, rv: Callable[[str], str] = la
     d = json.loads(source.read_text())
     assert d['schema_version'] == 2
     out.mkdir(parents=True, exist_ok=True)
-    cap = (r'Temporal refining and acceptance conditions. Lag is the number of keyframes observed after the query; n/a denotes inapplicable strength. '
-           r'Full learning updates the NSD modules' + rv(' from scratch with the strength fixed') + '.')
+    cap = (r'Temporal refining and acceptance conditions. Lag denotes the maximum required look-ahead after the query, in keyframes, derived from the refining and acceptance windows; n/a denotes inapplicable strength. '
+           r'Full learning updates the NSD modules' + rv(' from random initialization with the strength fixed') + '.')
     t = start_table(cap, 'tab:temporal_window_controls')
     t += [r'\begin{tabular}{@{}llllll@{}}\toprule',
           r'Variant & Refining offsets & Learning & Strength & Acceptance & Lag \\ \midrule']
@@ -217,29 +253,43 @@ def generate(source: Path, out: Path, prefix: str, rv: Callable[[str], str] = la
             if last is not None:
                 t.append(r'\addlinespace[2pt]')
             heading = {'training_free': 'Training-free uniform-subtraction controls', 'learned': 'Learned model with two-sided acceptance',
-                       'zero_lag': 'Zero-lag configurations: past-only acceptance'}[row['group']]
+                       'zero_lag': 'Past-only configurations'}[row['group']]
             t.append(r'\multicolumn{6}{@{}l}{\emph{' + heading + r'}} \\')
             last = row['group']
         t.append(' & '.join(row[k] if row[k] is not None else ('not stated' if k == 'lag' else 'n/a')
                             for k in ('label', 'window', 'scope', 'strength', 'acceptance', 'lag')) + r' \\')
-    t += [r'\bottomrule\end{tabular}',
-          r'\par\smallskip\begin{minipage}{\textwidth}\footnotesize',
-          r'Past-only NSD expands the candidate-side correspondence radius from 10 to 20 keyframes; the radius is twice the maximum temporal offset. '
-          r'Learned ' + rv('models') + ' use three ' + rv('seeds') + ' and 512 ' + rv('training') + ' updates.',
-          r'\end{minipage}', r'\end{table*}']
-    (out / 'appdx_temporal_window_controls.tex').write_text('\n'.join(t) + '\n')
-    cap = (r'Absolute performance for temporal-window and zero-lag controls (\%). Learned values are mean $\pm$ SD over three ' + rv('seeds') + '. '
-           + rv(r'Symmetric NSD is the model of Table~\ref{tab:results}.'))
-    t = start_table(cap, 'tab:temporal_window_results') + absolute_header()
-    t.append(r'\multicolumn{7}{@{}l}{\emph{Two-sided acceptance: training-free models and NSD}} \\')
-    t += [absolute_row(row) for row in d['window_absolute']]
-    t += [r'\addlinespace[2pt]', r'\multicolumn{7}{@{}l}{\emph{Past-only acceptance (zero lag)}} \\']
-    t += [absolute_row(row) for row in d['zero_absolute']]
     t += [r'\bottomrule\end{tabular}', r'\end{table*}']
+    (out / 'appdx_temporal_window_controls.tex').write_text('\n'.join(t) + '\n')
+    # 원고는 조건표를 불러오지 않는다(2026-11-21 결과표에 합침). 조건 열과 정의는 결과표가 싣는다.
+    cap = (r'Conditions and absolute performance for temporal-window and past-only controls (\%). '
+           r'Lag denotes the maximum required look-ahead after the query, in keyframes, derived from the refining and acceptance windows; n/a denotes inapplicable strength. '
+           r'Learned models update the NSD modules' + rv(' from random initialization with the strength fixed')
+           + r'; their values are mean $\pm$ SD over three ' + rv('seeds') + '. '
+           + rv(r'Symmetric NSD is the model of Table~\ref{tab:results}.'))
+    conditions = {row['label']: row for row in d['conditions']}
+    assert [row['label'] for row in d['window_absolute'] + d['zero_absolute']] == list(conditions)
+    # 조건 열을 더해 전체 폭을 넘으므로 다른 부록 표처럼 폭에 맞춰 줄인다(자연 크기보다 키우지 않는다).
+    t = start_table(cap, 'tab:temporal_window_results') + [r'\sbox0{%'] + absolute_header()
+    # 같은 세기(-0.5) 대조를 먼저 묶고, 세기를 줄인 한쪽 창은 따로 묶는다. 줄 이름의 세기 구분은 Strength 열이 대신한다.
+    shown = {'Preceding five, equal': 'Preceding five', 'Preceding five, selected': 'Preceding five',
+             'Following five, equal': 'Following five', 'Following five, selected': 'Following five',
+             'No refining, two-sided acceptance': 'No refining'}
+    by_label = {row['label']: row for row in d['window_absolute']}
+    same = ['No refining, two-sided acceptance', 'Symmetric uniform', 'Preceding five, equal', 'Following five, equal', 'Symmetric NSD']
+    reduced = ['Preceding five, selected', 'Following five, selected']
+    assert sorted(same + reduced) == sorted(by_label)
+    line = lambda label: absolute_row(dict(by_label[label], label=shown.get(label, label)), conditions[label])
+    t.append(r'\multicolumn{10}{@{}l}{\emph{Two-sided acceptance}} \\')
+    t += [line(label) for label in same]
+    t += [r'\addlinespace[2pt]', r'\multicolumn{10}{@{}l}{\emph{Two-sided acceptance, one-sided windows at reduced strength}} \\']
+    t += [line(label) for label in reduced]
+    t += [r'\addlinespace[2pt]', r'\multicolumn{10}{@{}l}{\emph{Past-only acceptance}} \\']
+    t += [absolute_row(row, conditions[row['label']]) for row in d['zero_absolute']]
+    t += [r'\bottomrule\end{tabular}}', r'\ifdim\wd0>\textwidth\resizebox{\textwidth}{!}{\usebox0}\else\usebox0\fi', r'\end{table*}']
     (out / 'appdx_temporal_window_results.tex').write_text('\n'.join(t) + '\n')
-    cap = (r'Paired temporal-window and zero-lag differences in percentage points, reported as first named condition minus second. '
-           r'Conditional 95\% intervals use paired sequence resampling; equal-strength rows use $-0.5$, and uniform denotes uniform subtraction. '
-           + rv('Window and acceptance conditions') + r' are listed in Table~\ref{tab:temporal_window_controls}.')
+    cap = (r'Paired temporal-window and past-only differences in percentage points, reported as first named condition minus second. '
+           r'The 95\% intervals use paired sequence resampling; rows use strength $-0.5$ unless stated, and uniform denotes uniform subtraction. '
+           + rv('Window and acceptance conditions') + r' are listed in Table~\ref{tab:temporal_window_results}.')
     t = start_table(cap, 'tab:temporal_window_deltas')
     t += [r'\label{tab:zero_lag_controls}', r'\begin{tabular}{@{}lccc@{}}\toprule',
           r'Comparison & Overall & Forward-only & Reverse-only \\ \midrule']
@@ -249,17 +299,16 @@ def generate(source: Path, out: Path, prefix: str, rv: Callable[[str], str] = la
             t.append(r'\midrule')
         t.append(r'\multicolumn{4}{@{}l}{\textbf{' + metric + r'}} \\')
         for comparison, groups in comparison_rows(rows, metric).items():
-            t.append(comparison + ' & ' + ' & '.join(stack_cell(groups.get(g)) for g in ('Overall', 'Forward', 'Reverse')) + r' \\')
-            t.append(r'\addlinespace[1.5pt]')
-    t += [r'\bottomrule\end{tabular}', r'\par\smallskip\begin{minipage}{\textwidth}\footnotesize']
-    f1 = next(r['metrics']['F1'] for r in rows if r['comparison'].startswith('Preceding five, selected') and r['group'] == 'Overall')
-    t += ['For preceding five, selected $-$ symmetric uniform, the overall F1 difference is ' + cell(f1) + '.',
-          r'\end{minipage}', r'\end{table*}']
+            comparison = (comparison.replace(', equal $-$', ' $-$')
+                          .replace('Preceding five, selected $-$', r'Preceding five ($\eta=' + conditions['Preceding five, selected']['strength'].strip('$') + '$) $-$'))
+            t.append(comparison + ' & ' + ' & '.join(cell(groups.get(g)) for g in ('Overall', 'Forward', 'Reverse')) + r' \\')
+    t += [r'\bottomrule\end{tabular}', r'\end{table*}']
     (out / 'appdx_temporal_window_deltas.tex').write_text('\n'.join(t) + '\n')
     n = {item['id']: item['tex'] for item in d['narratives']}
     inp = lambda name: r'\input{' + (prefix.rstrip('/') + '/' if prefix else '') + name + '}'
-    chunks = [n['window_setup'], n['window_learning'], inp('appdx_temporal_window_controls'), inp('appdx_temporal_window_results'),
+    chunks = [n['window_setup'], n['window_learning'], inp('appdx_temporal_window_results'),
               inp('appdx_temporal_window_deltas'), n['window_readout'], n['zero_setup'], n['zero_readout']]
+    chunks = [c for c in chunks if c]  # 원고에서 뺀 문단은 빈 문자열로 둔다(2026-11-20 window_learning).
     (out / 'temporal_controls.tex').write_text('\n\n'.join(chunks) + '\n')
     return d
 

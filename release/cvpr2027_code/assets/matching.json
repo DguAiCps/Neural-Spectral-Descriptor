@@ -1,0 +1,15 @@
+{
+ "fusion_weights": {
+  "key": 2.0,
+  "aux": 1.0,
+  "spectral_alignment": 2.0,
+  "column_alignment": 2.0
+ },
+ "whitened_mix": 0.25,
+ "score_calibration": {
+  "mean": 0.55895355951616,
+  "scale": 0.23992435815998933,
+  "slope": 2.6196632993107323,
+  "intercept": -1.9417772902682255
+ }
+}

@@ -1,0 +1,60 @@
+{
+ "karlsruhe": [
+  "kitti/00",
+  "kitti/07",
+  "kitti/08",
+  "kitti360/0000"
+ ],
+ "seoul": [
+  "helipr/Town01",
+  "helipr/Town02",
+  "helipr/Town03"
+ ],
+ "daejeon": [
+  "helipr/KAIST04",
+  "helipr/KAIST05",
+  "helipr/KAIST06",
+  "helipr/DCC04",
+  "helipr/DCC05",
+  "helipr/DCC06",
+  "helipr/Riverside04",
+  "helipr/Riverside05",
+  "helipr/Riverside06",
+  "mulran/KAIST01",
+  "mulran/KAIST02",
+  "mulran/KAIST03",
+  "mulran/DCC01",
+  "mulran/DCC02",
+  "mulran/DCC03",
+  "mulran/Riverside01",
+  "mulran/Riverside02",
+  "mulran/Riverside03"
+ ],
+ "ann_arbor": [
+  "nclt/2012-01-08",
+  "nclt/2012-02-04",
+  "nclt/2012-03-17",
+  "nclt/2012-05-11",
+  "nclt/2012-08-04",
+  "nclt/2012-11-04",
+  "nclt/2012-11-16",
+  "nclt/2013-01-10",
+  "nclt/2013-02-23"
+ ],
+ "stockholm": [
+  "mcd/kth_day_06",
+  "mcd/kth_day_09",
+  "mcd/kth_day_10",
+  "mcd/kth_night_01",
+  "mcd/kth_night_04",
+  "mcd/kth_night_05"
+ ],
+ "hamburg": [
+  "mcd/tuhh_day_02",
+  "mcd/tuhh_day_03",
+  "mcd/tuhh_day_04",
+  "mcd/tuhh_night_07",
+  "mcd/tuhh_night_08",
+  "mcd/tuhh_night_09"
+ ]
+}
