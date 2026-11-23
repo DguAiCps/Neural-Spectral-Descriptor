@@ -38,7 +38,10 @@ NARRATIVE_FIXES = {
                         'the following window shows the same direction asymmetry. On a reverse revisit, one-sided windows contrast the query and '
                         'stored place against opposite sides of the road.\n\nWe also evaluate each one-sided window at a reduced strength, set '
                         'empirically to $-0.125$ for the preceding window and $-0.25$ for the following window. The preceding window then narrows'),
-                       ('stays close to no refining. Symmetric NSD uses', 'stays close to no refining.\n\nSymmetric NSD uses')),
+                       ('stays close to no refining. Symmetric NSD uses', 'stays close to no refining.\n\nSymmetric NSD uses'),
+                       ('On a reverse revisit, one-sided windows contrast the query and stored place against opposite sides of the road.',
+                        'On a reverse revisit, a one-sided window contrasts the query and the stored place against opposite stretches of the '
+                        'road: one against the segment before the place, the other against the segment after it.')),
     'zero_setup': ((r", matching NSD's per-layer neighbor count", ''),
                    ('Following the rule of twice the maximum temporal offset, the candidate-side correspondence radius is 20 keyframes, increased from 10.',
                     'As in NSD, the candidate-side correspondence radius is twice the maximum temporal offset, which gives 20 keyframes instead of 10.'),
