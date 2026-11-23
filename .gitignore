@@ -73,15 +73,9 @@ checkpoints/800d_4sensor_seed2_20260604_125426/*
 !checkpoints/800d_4sensor_seed3_20260623_132834/
 checkpoints/800d_4sensor_seed3_20260623_132834/*
 !checkpoints/800d_4sensor_seed3_20260623_132834/best_model.pth
-# app:reranker_ablation KITTI-only learned residual reranker (108 KB)
-!checkpoints/residual_bev384_20260511_161726/
-checkpoints/residual_bev384_20260511_161726/*
-!checkpoints/residual_bev384_20260511_161726/best.pth
-# app:reranker_ablation KITTI initial learned reranker (108 KB)
 !results/
 results/*
 !results/ctx128_cosine_bayesian/
-!results/kitti_learned_reranker_bev384_20260512_170947.pth
 
 # _ablation: encoder-preset + gated GAT + phase rerank ablation tree
 # Skip transient / derived data (preprocessed caches, logs, intermediate ckpts)
