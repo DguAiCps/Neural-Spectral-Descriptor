@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""보고모델 교체(2026-11-16) 단위 C 항목 4: 요구 정밀도별 도시 매크로 재현율(그림 fig_precision_recall 후보).
+"""요구 정밀도별 도시 매크로 재현율 그림(fig_precision_recall).
 
 _paper_precision_fresco_v23.py의 곡선 자료(results/paper_precision_fresco_20261113/curves.json)에서 NSD 곡선만
 지정한 원장으로 다시 집계해 바꾼다. 다른 10곡선·배치·색·글꼴은 그대로다(같은 PRECISION_LAYOUT, preview.render).
-먼저 이전 NSD 원장(diff_s1..3)으로 기존 NSD 곡선(평균·SD)을 재현한 뒤 새 원장을 넣는다.
+먼저 old 꼬리표 원장(diff_s1..3)으로 curves.json의 NSD 곡선(평균·SD)을 재현해 계산 경로를 확인한 뒤 --nsd로 지정한 원장을 넣는다.
 
 python3 scripts/_report_model_precision_20261116.py [--nsd new|old] [--fig-dir DIR]
 출력: results/pdv2_report_model_20261116/analysis/precision/{curves.json,summary.json}, analysis/figures/fig_precision_recall.{pdf,png,svg}
@@ -95,7 +95,7 @@ def main():
 
 
 def crossing(a, b):
-    """NSD가 BEVPlace++ 이상이 되기 시작하는 요구 정밀도(그 위로 계속 앞서는 최소 격자점)."""
+    """두 곡선의 교차 정밀도: a >= b가 격자 끝까지 이어지는 최소 요구 정밀도."""
     g = np.asarray(review.GRID)
     ahead = a >= b
     idx = len(g)

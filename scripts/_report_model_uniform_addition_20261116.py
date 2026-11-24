@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""균등 더하기(이웃 평활) 대조를 새 고정 설정(융합 (2,1,2,2), λ=0.25)에서 다시 계산한다.
+"""균등 더하기(이웃 평활) 대조를 고정 설정(융합 (2,1,2,2), λ=0.25)에서 계산한다.
 
 정의는 scripts/_pdv2_uniform_addition_control.py(2026-11-10)와 같다: 균등 감산과 같은 transport_difference·두 층·균등 주의에서
 세기만 η>0(한 층 = (1−η)·자기 + η·이웃 평균). 신경망·학습 없음. 세기 후보 {0.0625, 0.125, 0.25, 0.5, 1}, 검증9 파이프라인 집계
@@ -9,10 +9,10 @@ AP 최대(1e-9 안 동률이면 작은 세기)로 하나를 고르고 시험46�
 pipeline.winners, prior.base.prior.plan, P.score(z, plan, λ)).
 
 재현 검사
-- 같은 경로로 S 원장의 uniform(새 설정 균등 감산)을 승자·점수 비트 단위로 재현한다(검증9·시험46).
-- 옛 설정(P.CURRENT_W, λ=0.25, 옛 후보 정적 점수)으로 옛 균등 더하기 원장(/workspace/data/nsd_results/pdv2_uniform_addition_20261110)을
-  재현해 조건 구현을 확인한다(검증: 다섯 세기, 시험: +0.0625). 옛 검증 identity도 재현한다.
-- 시험 identity(정제 없음)는 단위 B 원장(ablations/ledgers/test/<seq>/identity.npz, 새 설정)을 그대로 쓴다.
+- 같은 경로로 S 원장의 uniform(고정 설정 균등 감산)을 승자·점수 비트 단위로 재현한다(검증9·시험46).
+- P.CURRENT_W 설정(λ=0.25, 그 설정의 후보 정적 점수)으로 /workspace/data/nsd_results/pdv2_uniform_addition_20261110의
+  균등 더하기 원장을 재현해 조건 구현을 확인한다(검증: 다섯 세기, 시험: +0.0625). 그 설정의 검증 identity도 재현한다.
+- 시험 identity(정제 없음)는 ablations/ledgers/test/<seq>/identity.npz 원장(고정 설정)을 그대로 쓴다.
 
 docker exec -w /workspace/Neural-Spectral-Codec ring_baseline python3 scripts/_report_model_uniform_addition_20261116.py <action>
   worker --role val|test --sequence S

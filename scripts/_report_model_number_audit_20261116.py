@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""보고모델 교체(2026-11-16) 단위 F2: 본문·부록 NSD 의존 수치 전수 조사표.
+"""본문·부록 NSD 의존 수치 전수 조사표.
 
 각 항목의 새 값은 결과 JSON에서 직접 읽어 반올림한다(차이는 반올림 전 값으로 계산된 delta_pp를 그대로 반올림).
 처리: replace(원고에 \\rev{}로 교체), hold(문장 보류, 초안 파일로), pending(결과 미완), na(NSD 무관·값 불변).
@@ -283,7 +283,7 @@ add(S, "B Training and controlled learning, new paragraph 'Learned contrast stre
 add(S, "B Training and controlled learning, Table stage2_controls and its lead sentence", "Table~\\ref{tab:stage2_controls} lists the Stage-2 controls ...", "표·문장", "삭제",
     None, None, "removed", "F3 후속: 사용자 결정으로 삭제(결과 JSON 보존)")
 
-# ---------------- 단위 F3(2026-11-17) 갱신: 비용 재측정·새 재계산·부록 구조 서술 정리 반영 ----------------
+# ---------------- F3: 비용 측정·재계산·부록 구조 서술 ----------------
 CO = "cost/summary.json"
 cm = G(CO, "main", "skipped")
 F3 = [  # (location 부분 문자열, quote 부분 문자열, action, new, source, field, note)

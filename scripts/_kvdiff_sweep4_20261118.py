@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""차이 K/V 입력 4차 탐색(시드 1~3): 이웃 범위와 초기화를 두 조건 모두 같이 바꾸면 차이 계열과 절대 K/V(abskv)의 순위가 바뀌는가.
+"""이웃 범위·초기화별 K/V 입력 변형 비교(시드 1~3).
 
 변형(1차 스크립트 scripts/_kvdiff_variants_20261118.py = V의 구현 그대로): sym(NSD), abskv, diffk_absv.
 학습 설정은 모두 기본(512갱신, lr 1e-3, 게이트 고정, CFG x=log__n=ln__g=frozen__lr=1e-3__U=1536). 모두 로컬 GPU.

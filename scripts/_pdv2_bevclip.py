@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
-"""C3 chain with the clipped-BEV NSD auxiliary block (fix A, 2026-10-10).
+"""C3 chain with the clipped-BEV NSD auxiliary block.
 
 Same as scripts/_pdv2_c3.py except where the spectrum caches come from: val
 and test spectra are read from data/preprocessed_v2{_odom}_bevclip/
 (scripts/_bevclip_spec.py: sk_re/sk_im from the BEV grid clipped at zero,
 raw_height unchanged). Every other cache, the refiner, omega and the
-selection rules are those of the C3 run, so for seed 1 NSD-H (hspec12)
-reproduces results/pdv2_c3 up to run-to-run GPU noise (a rerun of the
-original chain on kitti360/0004 also moves single queries in a few of the 89
-tuples; the new hspec12 grid equals that rerun exactly). NCLT test sessions
-read the invariant-key caches of data/nclt_fov/{odom,gt}/ (scripts/_nclt_fov_fix.py:
-the mirrored elevation window of the upside-down HDL-32E, 2026-10-11); NCLT
-is in no validation set, so no selection changes. Each seed is an
+selection rules are those of the C3 run. NCLT test sessions read the
+invariant-key caches of data/nclt_fov/{odom,gt}/ (scripts/_nclt_fov_fix.py:
+the elevation window mirrored for the upside-down HDL-32E); NCLT is in no
+validation set, so it does not enter selection. Each seed is an
 independent replicate (all selection refit per seed):
 
   model       checkpoints/pdv2_causal_s{seed}

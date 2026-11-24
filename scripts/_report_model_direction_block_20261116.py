@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""보고모델 교체(2026-11-16) 단위 C 항목 7 보조: 방향별 학습 기여의 블록 재표집 민감도(부록 방향별 구간표의 블록 행).
+"""방향별 학습 기여의 블록 재표집 민감도(부록 방향별 구간표의 블록 행).
 
 scripts/_review_direction_bootstrap.py(시퀀스 + 원형 100질의 블록, 2,000회, rng [20261106, i])와
 _review_direction_expanded_report.collect_learning(6도시 모두 남은 replicate만)의 절차를 그대로 쓴다.
-같은 replicate 안에서 이전 원장(fixed, diff_s1..3)과 새 원장(uniform, 새 NSD 4..6)을 함께 계산해,
-이전 쪽이 기존 direction_learning/{summary,fixed_city_block_summary}.json의 diff-fixed 구간을 재현하는지 확인한다.
+같은 replicate 안에서 old 꼬리표 원장(fixed, diff_s1..3)과 NSD 원장(uniform, NSD 시드 4..6)을 함께 계산해,
+old 쪽이 direction_learning/{summary,fixed_city_block_summary}.json의 diff-fixed 구간을 재현하는지 확인한다.
 출력: results/pdv2_report_model_20261116/analysis/main/direction_block_summary.json
 """
 import argparse

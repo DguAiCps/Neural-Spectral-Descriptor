@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""차이 K/V(NSD) 대 절대 K/V(abskv): 평가 조건을 질의 단위로 나눠 NSD가 앞서는 조건이 있는지 본다(2026-11-18).
+"""차이 K/V(NSD) 대 절대 K/V(abskv): 질의 속성(시간 간격·거리·방향 등)별 비교(2026-11-18).
 원장만 읽는 CPU 분석(호스트 numpy·scipy), 재학습·GPU 없음.
 
   python3 scripts/_kveval_query_splits_20261118.py meta      # 1단계: 공변량만 계산·분포 출력(점수 안 봄)
@@ -7,8 +7,6 @@
 출력: results/kv_eval_conditions_20261118/query_splits/{meta.npz, meta_distribution.json, summary.json, tables.csv}
 
 ==================================================================== 사전 고정
-(1단계 `meta`로 공변량 분포만 본 뒤, NSD·abskv 점수를 조건별로 보기 전에 적음. 분포 수치는 meta_distribution.json.
- 균등 감산(uniform)은 A5·A7 정의에 쓰는 학습 없는 기준선이라 1단계에서 그 top1 정오·점수 분포를 보았다.)
 
 비교: 시드 4~6 = NSD(new:{4,5,6}, results/pdv2_scratch_search_20261116/ledgers) − abskv(abskv@s{4,5,6}@u512,
       results/pdv2_report_model_20261116/controls/ledgers). 시드 4는 두 쪽 모두 서버 RTX PRO 6000 재학습과 비트 일치
@@ -552,8 +550,8 @@ def write_tables(out: dict) -> None:
 
 
 def posthoc() -> None:
-    """사후 확인(결과를 본 뒤 추가, 판정·경계에 쓰지 않음): A6a 회전 조각이 양성 쪽인지 음성 쪽인지와 도시별 분포.
-    경계는 바꾸지 않았다(시퀀스 안 상위 20% 그대로)."""
+    """추가 진단(판정에 쓰지 않음): A6a 회전 조각의 양성·음성 구성과 도시별 분포.
+    경계는 A6a와 같다(시퀀스 안 상위 20%)."""
     M = load_meta()
     S = C.SEQS
     d456 = {"nsd": [{s: C.load(f"new:{k}", s) for s in S} for k in C.NEW_SEEDS],

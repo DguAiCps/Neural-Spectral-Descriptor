@@ -1,4 +1,4 @@
-# Check which omega was applied when 08-04 key dumps were produced: emb416[:, :288] should be collinear with d288*omega
+# Check which omega makes emb416[:, :288] collinear with d288*omega in each key dump
 import glob
 from pathlib import Path
 import numpy as np

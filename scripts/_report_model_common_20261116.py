@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""보고모델 교체(2026-11-16) 단위 C 공통: 원장 경로, 도시 구성, 시퀀스 지표, 6도시 매크로, 짝지은 구간.
+"""표·그림 공통: 원장 경로, 도시 구성, 시퀀스 지표, 6도시 매크로, 짝지은 구간.
 
-새 보고모델 원장(results/pdv2_scratch_search_20261116/ledgers)과 이전 보고모델 원장
-(results/pdv2_diffattn_contrast_test_20261104)을 같은 함수로 읽어, 이전 원장으로 기존 발표 수치를 재현한 뒤
-새 원장을 넣는다. torch 없이 호스트에서 돈다.
+NSD 원장(results/pdv2_scratch_search_20261116/ledgers, new 꼬리표)과 old 꼬리표 원장
+(results/pdv2_diffattn_contrast_test_20261104)을 같은 함수로 읽는다. torch 없이 호스트에서 돈다.
 
 모델 꼬리표:
   new:<seed>     새 NSD (CFG@s<seed>@u512)          시험·검증
@@ -30,7 +29,7 @@ BEV = ROOT / "results/pdv2_review_response_20261104/bev"
 DIRS = ROOT / "results/pdv2_review_direction_yaw_20261105/directions"
 OUT = ROOT / "results/pdv2_report_model_20261116/analysis"
 NEW_SEEDS = (4, 5, 6)
-REF_SEEDS = (1, 2, 3)          # 구성 선택에 쓴 시드(참고)
+REF_SEEDS = (1, 2, 3)          # 참고 시드
 BEV_SEEDS = (1, 2, 3)
 OLD_SEEDS = (1, 2, 3)
 METRICS = ("AP", "max_F1", "R@100P", "R@1")

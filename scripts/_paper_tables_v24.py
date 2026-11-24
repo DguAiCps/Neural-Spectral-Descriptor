@@ -18,11 +18,11 @@ ROOT = Path(__file__).resolve().parents[1]
 METRICS = ("AP", "max_F1", "R@100P", "R@1")
 # 이전 보고모델 결과. 비교 방법 검산(DeepRING 학습 목록·분할 목록)이 이 protocol.json을 기준으로 하므로 남겨 둔다.
 CURRENT = ROOT / "results/pdv2_diffattn_contrast_test_20261104"
-# 새 보고모델(사용자 결정 2026-11-16): x=log__n=ln__g=frozen__lr=1e-3__U=1536 @512갱신, 주 수치 시드 4·5·6.
+# 새 보고모델: x=log__n=ln__g=frozen__lr=1e-3__U=1536 @512갱신, 주 수치 시드 4·5·6.
 REPORT = ROOT / "results/pdv2_report_model_20261116"
 NSD_SEEDS = (4, 5, 6)
 BEV_SEEDS = (1, 2, 3)
-# NSD 쪽 원천은 아래 해시로 고정한다(2026-11-17 F1 단위가 고정). 원천이 바뀌면 생성기가 멈춘다.
+# NSD 쪽 원천은 아래 해시로 고정한다. 원천이 바뀌면 생성기가 멈춘다.
 NSD_SHA256 = {
     "analysis/main/summary.json": "8f95edde29af6c2121e5e628fab76cab8a8cee170b4723de4c905832fb7e4247",
     "analysis/main/integrated_report.json": "d9724fea0b1d9ce54e1c31351f743c35d76c17ab2b3792d7b138657c9f8bd0ec",
@@ -70,9 +70,9 @@ def nsd_source(rel: str) -> Path:
     expected = NSD_SHA256[rel]
     assert expected is not None and digest(path) == expected, path
     return path
-# 저자 결정(2026-11-08): 표2의 SeqOT는 논문 학습법(20+20에폭)을 완주하고 공식 GeM을 같은 함수의 log-domain 계산으로
-# 바꾼 3시드 재학습이다(paper recipe + numerical stabilization of official GeM). 공통 원천은 덮지 않고, SeqOT 항목만
-# 바꾼 요약을 아래 해시로 고정해 채택한다.
+# 표2의 SeqOT는 논문 학습법(20+20에폭)으로 학습한 3시드 모델이며, GeM은 공식 GeM과 같은 함수를 수치 안정화를 위해
+# log-domain에서 계산한다(paper recipe + numerical stabilization of official GeM). 공통 원천에서 SeqOT 항목만
+# 바꾼 요약을 아래 해시로 고정한다.
 COMMON_BASELINES = ROOT / "results/pdv2_baseline_seeds/summary.json"
 SEQOT = ROOT / "results/pdv2_seqot_stable_gem_20261108"
 BASELINES = SEQOT / "manuscript_integration_20261108/baseline_seeds_summary_seqot_stable.json"
@@ -83,7 +83,7 @@ ADOPTED_SEQOT = {
     "base_sha256": "8ee86c722504924426211407dd514a1f44f41e4e2680db024a76e72331600e7a",
     "common_sha256": "53cb0b724111661f113c49911e07b655b35d7f0645634aaada9fbc1da3f9dada",
 }
-# 저자 결정(2026-11-08): 표2·표S17의 SeqOT 비용은 위 채택 기록의 시드1 모델을 같은 로컬 RTX 5080·공통 규약으로 다시 잰 값이다.
+# 표2·표S17의 SeqOT 비용은 위 기록의 시드1 모델을 같은 로컬 RTX 5080·공통 규약으로 다시 잰 값이다.
 # 기존 공통 비용 원천은 덮지 않고, 복사한 측정 파일을 아래 해시로 고정해 SeqOT 비용만 바꾼다. 세 반복을 모두 쓴다.
 SEQOT_COST = SEQOT / "cost_20261108"
 ADOPTED_SEQOT_COST = {
@@ -113,14 +113,12 @@ FREQ_SWEEP = ROOT / "results/freq_count_sweep_20261122/summary.json"
 DIRECTION = ROOT / "results/pdv2_review_direction_yaw_20261105"
 MACRO = ROOT / "results/pdv2_macro_ablation_20261106"
 MAPSIZE = ROOT / "results/pdv2_contrast_table3_mapsize_20261106"
-# 저자 결정(2026-11-06): 결과를 바꾸지 않는 구현 정리만 적용한 window 측정을 표3에 쓴다.
-# 측정 파일은 publish_ready=False로 남기고, 채택은 이 해시로 고정한다.
+# 표3 비용은 결과를 바꾸지 않는 구현 정리만 적용한 window 구현의 측정이며, 이 해시로 고정한다.
 ADOPTED_COST = {"variant": "window", "decided": "2026-11-06", "sha256": "abcdbfaffac8fe2ff8a0bc9233cacae831240799d64adfa5bf9a6d8d081480ea"}
-# 저자 결정(2026-11-07): 표2·표S17의 RING++는 공개 CUDA 특징의 비원자 격자 max만 정확 max(np.fmax.at)로 바꾼 구현이다.
-# 인식(46시험 원장)과 비용(로컬 RTX 5080 실측)이 같은 구현이다. 공통 원천은 덮지 않고, RING++ 항목만 바꾼 사본과
-# publish_ready=False로 남긴 측정 파일을 아래 해시로 고정해 채택한다. 다른 방법의 채택 조건은 그대로다.
+# RING++ 정확max 구현: 공개 CUDA 특징의 비원자 격자 max를 정확 max(np.fmax.at)로 계산한다.
+# 인식(46시험 원장)과 비용(로컬 RTX 5080 실측)이 같은 구현이다. RING++ 항목만 바꾼 사본과 측정 파일을 아래 해시로 고정한다.
 RINGPP = ROOT / "results/pdv2_baseline_revision_20261107/ringpp"
-# 2026-11-08: SeqOT 채택 요약을 기반으로 RING++ 사본을 같은 생성기로 다시 만들었다(RING++ 값은 그대로).
+# SeqOT 요약을 기반으로 같은 생성기로 만든 RING++ 사본(RING++ 값은 위와 같다).
 RINGPP_SUMMARY = SEQOT / "manuscript_integration_20261108/baseline_seeds_summary_seqot_stable_ringpp_exactmax.json"
 ADOPTED_RINGPP = {
     "decided": "2026-11-07",
@@ -133,9 +131,9 @@ ADOPTED_RINGPP = {
                     "5000": "2c7d770d53585e96edf0317ad53ba91af22e74953fa54ae87011dec4e344e3b1",
                     "10000": "cda79ac8b76abf0880bb3d4f889d55a0d9cc00a2f00bf190ab97f43e5321ed6a"},
 }
-# root 결정(2026-11-08): 표2·표S4·표S17에 FreSCo를 넣는다. 공식 MATLAB 2bf5cee·C++ d94040e의 미학습 1회 실행이다. NCLT 9개는 좌표 수정,
-# KITTI 00·07·08·KITTI-360 0000은 공식 KittiPointCloudSelect.cpp에 고정 두 줄(1974440 이전 빈 칸 의미, scripts/fresco_official/cpp/kitti_groundfix.py)을 적용한 지면 수정 재평가 원장이다(소스 동작으로 채택, root kgf 검산).
-# 원본 결과는 덮지 않는다. 인식은 지면 수정 패키지(FRESCO_KGF), 비용은 KITTI TU를 링크하지 않는 Sejong01 실측이라 기존 패키지(FRESCO) 사본을 해시로 고정한다.
+# 표2·표S4·표S17의 FreSCo는 공식 MATLAB 2bf5cee·C++ d94040e의 미학습 1회 실행이다. NCLT 9개는 좌표 수정,
+# KITTI 00·07·08·KITTI-360 0000은 공식 KittiPointCloudSelect.cpp에 고정 두 줄(1974440 이전 빈 칸 의미, scripts/fresco_official/cpp/kitti_groundfix.py)을 적용한 지면 수정 재평가 원장이다.
+# 인식은 지면 수정 패키지(FRESCO_KGF), 비용은 KITTI TU를 링크하지 않는 Sejong01 실측이라 기존 패키지(FRESCO) 사본을 해시로 고정한다.
 FRESCO = ROOT / "results/pdv2_fresco_seqot_integration_20261108"
 FRESCO_KGF = ROOT / "results/pdv2_fresco_kgf_integration_20261108"
 FRESCO_SUMMARY = FRESCO_KGF / "baseline_seeds_summary_seqot_stable_ringpp_exactmax_fresco_kgf.json"
@@ -154,9 +152,9 @@ ADOPTED_FRESCO = {
     "method_protocol_sha256": "18d435dc7789088f432986d0a400ed1efae9ece1461a23e28787b07c5091d6d7",
     "source_sha256": "8ac0aa7efbdf463906cff7f19b26982d52f6ffa49310468d1da8dd084488cf62",
 }
-# 사용자 승인(2026-11-10): 표2·표S4·표S17의 RING++는 정확max 특징에 상관 정규화 I2(평균0·분산1, float64 모분산, 정확 상수 채널 0, eps 없음)를
-# 쓴 고정 변형이다. 공식 InstanceNorm(eps 1e-5)의 정확max 값(위 ADOPTED_RINGPP)은 보존해 부록 진단으로만 쓴다. 인식(root 검산 46원장)과
-# 비용(같은 RTX 5080·규약)은 같은 I2 구현이다. 이전 원천은 덮지 않고, FreSCo 지면 수정 채택 요약에서 RING++만 바꾼 사본과 측정 파일을 해시로 고정한다.
+# 표2·표S4·표S17의 RING++는 정확max 특징에 상관 정규화 I2(평균0·분산1, float64 모분산, 정확 상수 채널 0, eps 없음)를
+# 쓴 변형이다. 공식 InstanceNorm(eps 1e-5)의 정확max 값(위 ADOPTED_RINGPP)은 부록 진단에 쓴다. 인식(46원장)과
+# 비용(같은 RTX 5080·규약)은 같은 I2 구현이다. FreSCo 지면 수정 요약에서 RING++만 바꾼 사본과 측정 파일을 해시로 고정한다.
 RINGPP_I2 = ROOT / "results/pdv2_ringpp_i2_integration_20261110"
 RINGPP_I2_SUMMARY = RINGPP_I2 / "baseline_seeds_summary_seqot_stable_ringpp_i2_fresco_kgf.json"
 ADOPTED_RINGPP_I2 = {
@@ -176,10 +174,10 @@ ADOPTED_RINGPP_I2 = {
                     "10000": "cbd076a132d30f8c98dbcd71ccce3f395474653b030b00a04ff867a8bfb53e8a"},
     "source_sha256": "3f93c67f1441ec64df0cd69cddcb570585d12f9f3b5985ad22bc676a0d481785",
 }
-# 사용자 승인(2026-11-10, "교체합시다"): 표2·표S4의 DeepRING은 식 9 스칼라 헤드 W·C+b를 W0 = 1/(학습8 고정 20에피소드 2,880질의의
+# 표2·표S4의 DeepRING은 식 9 스칼라 헤드 W·C+b를 W0 = 1/(학습8 고정 20에피소드 2,880질의의
 # 중심화 점수 RMS), b0 = 0으로 시작한 재구현이다(RING circorr2 점수, 시드 1·3·4, 검증9 선택 에폭 16·3·6). 모듈·매개변수 수·서술자·추론
-# 연산이 같아 비용은 기존 같은 구현 실측(EFFICIENCY)을 그대로 쓴다. root 최종 검산(28/28·독립 재집계)을 거친 시험46 138원장 사본과
-# I2 채택 요약에서 DeepRING만 바꾼 사본을 해시로 고정한다. 이전 W=1 시작 항목과 원논문 식 8 대조 결과는 보존한다.
+# 연산이 같아 비용은 기존 같은 구현 실측(EFFICIENCY)을 그대로 쓴다. 검산(28/28·독립 재집계)을 거친 시험46 138원장 사본과
+# I2 요약에서 DeepRING만 바꾼 사본을 해시로 고정한다.
 DEEPRING = ROOT / "results/pdv2_deepring_scaleinit_integration_20261110"
 DEEPRING_SUMMARY = DEEPRING / "baseline_seeds_summary_seqot_stable_ringpp_i2_fresco_kgf_deepring_scaleinit.json"
 ADOPTED_DEEPRING = {
@@ -193,17 +191,17 @@ ADOPTED_DEEPRING = {
     "calibration_sha256": "0f9f6265c936cad727f0ee3dc179ce17a65594f9d58bf3b532868429f08e9712",
     "epochs": {"1": 16, "3": 3, "4": 6},
 }
-# 사용자 결정(2026-11-10 밤): 부록 비교 방법 절에 표2의 RING++·SeqOT·FreSCo·DeepRING을 공개 코드 변형·이전 구성과 같은 공통 시험 규약으로
-# 나란히 싣는다(tab:baseline_release_comparison). 원천 목록은 /mnt/d/NSD_datasets/nsd_results/baseline_defense_20261110/facts/facts.json의
+# 부록 비교 방법 절에 표2의 RING++·SeqOT·FreSCo·DeepRING을 공개 코드 변형·이전 구성과 같은 공통 시험 규약으로
+# 나란히 싣는다(tab:baseline_release_comparison). 원천 목록은 facts.json의
 # item2_released_vs_table2이며, 생성기는 그 목록의 원래 결과 JSON을 읽는다. 공개 커널 RING++·공개 코드 학습법 SeqOT는 COMMON_BASELINES,
 # 이전 W=1 시작 DeepRING은 DEEPRING_SUMMARY의 대체 전 항목이다.
 RINGPP_MAXFIX = ROOT / "results/pdv2_ringpp_maxfix_20261105/summary_verified.json"
 FRESCO_PREFIX = FRESCO / "baseline_seeds_summary_seqot_stable_ringpp_exactmax_fresco.json"
-# 사용자 요청(2026-11-07): 부록 데이터셋 표는 모든 방법을 싣는다. 46시험 최종 원장을 데이터셋별로 다시 집계한 결과이며(원장·채택 요약 해시는 그 안),
+# 부록 데이터셋 표는 모든 방법을 싣는다. 46시험 최종 원장을 데이터셋별로 다시 집계한 결과이며(원장·채택 요약 해시는 그 안),
 # DeepRING 초기배율 채택 요약으로 다시 돌렸다(DeepRING 외 10방법 값이 직전 RING++ I2 집계와 같음은 그 파일 checks).
 DATASET_METHODS = DEEPRING / "datasets/dataset_methods_summary.json"
 DATASET_METHODS_SHA256 = "d5129726996e98a15a5a042aba9afa5a542b0c7d5fd304cdadfa71f36a5aeaf8"
-# 사용자 요청(2026-11-07): 부록에 검증에서 고정한 단일 판정 기준값의 시험 결과를 싣는다. 원천은 기준값 작업 결과이며
+# 부록에 검증에서 고정한 단일 판정 기준값의 시험 결과를 싣는다. 원천은 기준값 작업 결과이며
 # 규약·고정값·요약·오수락 층화·검산 파일을 아래 해시로 고정한다. 표2 수치와 그림5(기준값 sweep)는 바꾸지 않는다.
 THRESHOLD = ROOT / "results/pdv2_review_closure_20261107/threshold"
 THRESHOLD_SHA256 = {
@@ -213,7 +211,7 @@ THRESHOLD_SHA256 = {
     "false_accepts.json": "10d32b01498f784a24bd25f1735fd085e75229ed6d9eaa297f37f761b59ed313",
     "verification.json": "224ef6eb5c9c5fd8a717c2d667375567f2930dbb2f887f777a9bdfc608680833",
 }
-# 사용자 요청(2026-11-07): 부록에 정확한 분할 목록과 분할 쌍 50 m 지리 감사를 싣는다. 원천은 지리 감사 작업 결과이며
+# 부록에 정확한 분할 목록과 분할 쌍 50 m 지리 감사를 싣는다. 원천은 지리 감사 작업 결과이며
 # 목록·감사 요약·검산 파일을 아래 해시로 고정한다. 공통 좌표가 없는 쌍은 하한·도시 수준으로만 싣는다.
 GEOGRAPHY = ROOT / "results/pdv2_review_closure_20261107/geography"
 GEOGRAPHY_SHA256 = {
@@ -227,8 +225,7 @@ GEO_REVIEW_SHA256 = {
     "verification.json": "1fda0c0541ed9b7769af94f5ad264850e278a625c60a03c7473cb35756a252b8",
     "bridge_rotation_free_check.json": "8f48c1d35b8a4a4e4a99b7d7d5add51415575896a011b31f3b056599c184ce75",
 }
-# 저자 결정(2026-11-07): ImLPR는 현재 비교군에서 뺀다(results/pdv2_baseline_revision_20261107/decision.json).
-# 결과 파일은 보존하고, 표의 순위·비용 열은 아래 10개 방법(2026-11-08 FreSCo 추가)과 NSD만으로 계산한다.
+# 표의 순위·비용 열은 아래 10개 방법과 NSD로 계산한다.
 NAMES = {
     "disco": r"DiSCO~\citep{xu2021disco}",
     "deepring": r"DeepRING~\citep{lu2022deepring}",
@@ -802,7 +799,7 @@ def threshold_tables(output: Path, summary: dict) -> list:
         # 오수락이 없는 구간·질의 종류는 기록에 키가 없으므로 0으로 쓴다.
         block(lambda _, f: [f"{f.get('positive_returned_bin', {}).get(b, 0):,.1f} / {f.get('negative_returned_bin', {}).get(b, 0):,.1f}" for b in bins]),
         "llccccc", wide=True))
-    # 같은 오수락 수 비교(사용자 결정 2026-11-12): 시험 46시퀀스에 임계값 하나를 쓰고 합산 오수락 수를 맞춘다.
+    # 같은 오수락 수 비교: 시험 46시퀀스에 임계값 하나를 쓰고 합산 오수락 수를 맞춘다.
     # 새 보고모델 원천은 이전 원천과 같은 기준·같은 재표집 난수이고 BEVPlace++ 값이 같다(checks).
     matched_path = nsd_source("analysis/matched_fa/result.json")
     matched = read(matched_path)
@@ -941,7 +938,7 @@ def direction_tables(output: Path, summary: dict) -> list:
         "tab:direction", r"Group & Method & AP & Max F1 & R@100P & \shortstack{Revisit\\R@1}", rows, "llcccc", compact=True))
 
     rows = []
-    # 학습 차이 행은 NSD − 균등 감산만 남긴다(DiffAttnConv 학습 대조는 폐기). 두 재표집 절차를 같은 행 묶음에 둔다.
+    # 학습 차이 행은 NSD − 균등 감산이다. 두 재표집 절차를 같은 행 묶음에 둔다.
     for group, label in (("all", "All"), ("forward_only", "Forward-only"), ("reverse_only", "Reverse-only")):
         r = src["sequence"]["comparisons"]["diff-fixed"][group]["overall"]
         rows.append(f"{label} & Sequences & " + " & ".join(interval_cell(r[k]) for k in METRICS) + r" \\")
@@ -998,7 +995,7 @@ def nsd_main_sources() -> tuple:
     refining = read(nsd_source("ablations/no_refining_summary.json"))
     assert summary["queries_per_case"] == 195726 and summary["seeds"]["diff"] == list(NSD_SEEDS)
     assert summary["seeds"]["bev_native"] == list(BEV_SEEDS)
-    # 단위 C의 독립 재계산(평가 모듈을 거치지 않은 원장 직접 계산)이 공통 안내의 기준 수치와 같다.
+    # 독립 재계산(평가 모듈을 거치지 않은 원장 직접 계산)이 공통 안내의 기준 수치와 같다.
     assert verification["new_matches_brief"] and verification["new_pr_sweep_vs_independent_max_abs_err"] == 0.0
     brief = {"AP": (89.879, 0.197), "max_F1": (90.389, 0.181), "R@100P": (72.174, 0.556), "R@1": (91.742, 0.185)}
     uniform = {"AP": 89.198, "max_F1": 89.244, "R@100P": 68.820, "R@1": 91.488}
@@ -1074,9 +1071,9 @@ def nsd_cost(protocol_unused=None) -> tuple:
     return measured, scaled, sources, status
 
 
-# 새 보고모델 비용 재측정(2026-11-17, cost/DONE). 게이트 계산 생략 변형(η=−0.5 상수, 게이트 MLP 미평가)을 채택한다:
-# 게이트 계산 변형(cost/gate_computed/)과 승자·수락 점수가 비트 단위로 같고(verification.other_gate_variant), 측정 폴더의
-# 최상위·mapsize/가 이 변형이다. 측정 파일은 publish_ready=False로 남아 있으므로 채택은 아래 해시로 고정한다.
+# 새 보고모델 비용 재측정(2026-11-17, cost/DONE). 비용 측정은 학습에서 고정한 게이트 세기(η=−0.5)를 상수로 계산한 구현이다:
+# 게이트를 계산하는 구현(cost/gate_computed/)과 승자·수락 점수가 비트 단위로 같고(verification.other_gate_variant), 측정 폴더의
+# 최상위·mapsize/가 이 구현이다. 측정 파일은 아래 해시로 고정한다.
 NSD_COST_SHA256 = {
     "cost/nsd_n10000_window.json": "369cde60e918b01331ff3b4f556c09230a17bddefcec62b1cd67e0aec718d1c5",
     "cost/protocol_window.json": "b90144d978286987f2e0a3e14fb069b7168a3ac2495062755869d2a443e6b581",
@@ -1096,8 +1093,7 @@ def nsd_cost_remeasured() -> tuple:
         assert digest(paths[rel]) == expected, rel
     protocol = read(paths["cost/protocol_window.json"])
     assert protocol["gate"] == "skipped" and protocol["threads"] == 1 and (protocol["samples"], protocol["repeats"], protocol["warmup"]) == (96, 3, 12)
-    # 측정 스크립트 자체는 측정 뒤(00:50) 요약 단계가 덧붙어 해시가 달라졌다. 나머지 원천(모델·인코더·원장)은 측정 때와 같아야 하고,
-    # 측정 스크립트는 측정 때 해시와 현재 해시를 함께 남긴다.
+    # 측정 스크립트는 측정 때 해시와 현재 해시를 함께 기록한다. 나머지 원천(모델·인코더·원장)은 측정 때와 같아야 한다.
     script_note = {}
     for path, expected in protocol["sources"].items():
         if path == "scripts/_report_model_cost_20261116.py":
@@ -1174,7 +1170,7 @@ Method or comparison & AP & Max F1 & R@95P & R@99P & R@100P & Revisit R@1 \\
 
 
 def gate_table(output: Path) -> tuple:
-    """단위 G의 게이트 학습 대조 초안이 있으면 그대로 편입한다(없으면 표를 만들지 않는다)."""
+    """게이트 학습 대조 초안이 있으면 그대로 편입한다(없으면 표를 만들지 않는다)."""
     draft = REPORT / "analysis/gate/appdx_gate_learning_draft.tex"
     if not draft.exists():
         stale = output / "appdx_gate_learning.tex"
@@ -1190,7 +1186,7 @@ def gate_table(output: Path) -> tuple:
         assert len(inner) == 1
         text = text.replace(r"\caption{\rev{" + inner[0] + "}}", r"\caption{" + inner[0] + "}", 1)
     assert r"\rev{" not in text.split("% ----", 1)[0]
-    # 원고 정리(2026-11-20): 초안 머리 주석·뒤 문단 초안을 빼고, ‡행(표준화 입력 변형)과 캡션의 ‡ 설명을 뺀다.
+    # 초안 머리 주석·뒤 문단 초안은 쓰지 않고, ‡행(표준화 입력 변형)과 캡션의 ‡ 설명은 싣지 않는다.
     text = text.split("% ----", 1)[0].rstrip("\n") + "\n"
     head, body = text.split(r"\begin{table}", 1)
     assert head.startswith("% 초안(단위 G")
@@ -1242,7 +1238,7 @@ def generate(output: Path) -> dict:
                 for name, (label, mean, sd) in zip((*NAMES, "nsd"), rowspec)}
     labels = {name: label for name, (label, _, _) in zip((*NAMES, "nsd"), rowspec)}
 
-    # 부록 2단계 대조표(appdx_stage2_controls)는 원고에서 뺐다(사용자 결정 2026-11-17). 같은 수치는 표4(절제표)에 있다.
+    # 부록 2단계 대조표(appdx_stage2_controls)는 만들지 않는다. 같은 수치는 표4(절제표)에 있다.
 
     adopted_costs = {"ringpp": ringpp_i2_costs, "seqot": seqot_costs}
     measurements = [adopted_costs[m["method"]][10000] if m["method"] in adopted_costs else m
@@ -1442,8 +1438,8 @@ def generate(output: Path) -> dict:
     for k in METRICS:
         assert abs(macro["mean"]["diff"][k] - summary["mean"]["diff"][k]) < 1e-12
         assert abs(index["mean"]["dual_100_100"][k] - summary["mean"]["diff"][k]) < 1e-12
-    # 학습 대조 행(사용자 결정 2026-11-16·17): 새 NSD와 Past-only NSD(과거 10 정제·수락, 지연 0)만 남긴다.
-    # Past-only NSD는 새 NSD와 같은 처음부터 한 단계 학습(512갱신, 시드 4·5·6)이다. DiffAttnConv 학습 행은 실험 폐기, 절대 K/V는 원고 제외.
+    # 학습 대조 행은 NSD와 Past-only NSD(과거 10 정제·수락, 지연 0)다.
+    # Past-only NSD는 NSD와 같은 처음부터 한 단계 학습(512갱신, 시드 4·5·6)이다.
     past_mean, past_sd = control["pastonly"]
     stage_rows = [
         (r"\textbf{NSD}", summary["mean"]["diff"], summary["std"]["diff"]),
@@ -1460,7 +1456,7 @@ def generate(output: Path) -> dict:
         ("Past-only NSD", past_mean, past_sd),
     ]
     # 이름 열을 83.5pt로 고정해 가장 긴 이름(101pt)만 두 줄로 접고 숫자는 축소 없이 8pt를 유지한다(나머지 이름 최대 83.2pt).
-    # 단계 묶음 사이에 가로선을 둔다(사용자 지시 2026-11-06).
+    # 단계 묶음 사이에 가로선을 둔다.
     # 원고(v2.7)에 맞춰 표2처럼 전체 행에서 1·2위를 굵은 글씨·밑줄로 표시한다.
     stage_rankings = {k: sorted({mean[k] for _, mean, _ in stage_rows if mean is not None}, reverse=True) for k in METRICS}
     rows = [(rf"\midrule\multicolumn{{5}}{{@{{}}l}}{{{label}}} \\" if mean is None else
@@ -1471,7 +1467,7 @@ def generate(output: Path) -> dict:
         r"Bold marks the best values; underlining marks the second best.",
         "tab:online_components", r"Variant & AP & Max F1 & R@100P & \shortstack{Revisit\\R@1}", rows, "p{83.5pt}cccc", compact=True))
 
-    # 부록: 크기 점수만 쓸 때의 반환 오류 분해(사용자 지시 2026-11-10). 새 융합의 정렬 재점수 제거 원장과 NSD 시드 4~6 원장에서 계산했다.
+    # 부록: 크기 점수만 쓸 때의 반환 오류 분해. 새 융합의 정렬 재점수 제거 원장과 NSD 시드 4~6 원장에서 계산했다.
     alias_path = nsd_source("ablations/aliasing_summary.json")
     alias = read(alias_path)
     assert alias["status"] == "passed" and alias["model"]["seeds"] == list(NSD_SEEDS) and alias["magnitude_returns_identical_across_seeds"]

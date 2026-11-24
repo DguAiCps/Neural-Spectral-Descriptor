@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""보고모델 교체(2026-11-16) 단위 C 항목 5: 검증9에서 고정한 P99·P100·F1 기준값을 시험46에 적용(NSD 쪽 재계산).
+"""검증9에서 고정한 P99·P100·F1 기준값을 시험46에 적용.
 
 기존 규약 scripts/_review_v23_fixed_threshold_20261107.py(choose·fixed·mean_sd를 그대로 가져다 씀)와
 _report.py의 오수락 층(반환 거리 구간, 질의 종류×키프레임 간격×반환 거리)을 따른다.
---nsd old 로 돌리면 이전 원장으로 기존 results/pdv2_review_closure_20261107/threshold/{freeze,summary,false_accepts}.json
-값을 재현하는지 검사만 한다. --nsd new(기본)는 NSD 시드 4·5·6으로 계산하고, BEVPlace++는 기존 freeze τ를 다시 적용해
-기존 summary와 같은지 확인한 뒤 그대로 싣는다.
+--nsd old 로 돌리면 old 꼬리표 원장으로 results/pdv2_review_closure_20261107/threshold/{freeze,summary,false_accepts}.json
+값을 재현하는지 검사만 한다. --nsd new(기본)는 NSD 시드 4·5·6으로 계산하고, BEVPlace++는 그 freeze.json의 τ를 다시 적용해
+그 summary.json과 같은지 확인한 뒤 그대로 싣는다.
 
 출력(results/pdv2_report_model_20261116/analysis/threshold/): freeze.json, summary.json, false_accepts.json
 (스키마는 기존 파일과 같은 키; per_seed 키는 실제 시드 번호 "4","5","6")

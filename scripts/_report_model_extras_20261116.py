@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""보고모델 교체(2026-11-16) 단위 C 항목 11: 원장만으로 계산되는 그 밖의 NSD 의존 수치.
+"""원장만으로 계산되는 그 밖의 NSD 수치.
 
 1) 반환 오류 분해 표(appdx_aliasing)의 NSD 열(도시별 오류·먼 오류율, 도시 매크로)과 합산 'NSD 남은 오류 중 먼 장소 비율'.
-   크기 점수만 열과 전이 비율(59.03%·73.50%·1.28%)은 새 융합 가중치의 정렬 제거 원장이 필요해 계산하지 않는다(다른 단위).
-   이전 원장으로 _pdv2_aliasing_decomposition.city_rates의 NSD 열을 재현한 뒤 새 원장을 넣는다.
+   old 꼬리표 원장으로 _pdv2_aliasing_decomposition.city_rates의 NSD 열을 재현해 계산 경로를 확인한 뒤 new 꼬리표 원장(NSD 시드 4~6)으로 계산한다.
 2) 시드별 학습 기여, 도시별 학습 기여, 방향×도시별 학습 기여, 데이터셋 MCD 최대 F1 등 서술 수치를 모은다.
 출력: results/pdv2_report_model_20261116/analysis/extras/extras.json
 """

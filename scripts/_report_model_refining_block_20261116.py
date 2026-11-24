@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""보고모델 교체(2026-11-16): NSD − 정제 없음(no temporal spectrum refining)의 블록 재표집 구간(부록 "Learning across seeds and cities" 둘째 문단).
+"""NSD − 정제 없음(no temporal spectrum refining)의 블록 재표집 구간(부록 "Learning across seeds and cities" 둘째 문단).
 
 절차는 scripts/_report_model_direction_block_20261116.py(= scripts/_review_direction_bootstrap.py: 도시 안 시퀀스 + 원형 100질의 블록,
-2,000회, rng [20261106, i])와 같다. 같은 replicate 안에서 이전 원장(identity, diff_s1..3; results/pdv2_diffattn_contrast_test_20261104)과
-새 원장(정제 없음 = ablations/ledgers/test/<seq>/identity.npz, 새 NSD 시드 4~6)을 함께 계산해, 이전 쪽이 기존
+2,000회, rng [20261106, i])와 같다. 같은 replicate 안에서 old 꼬리표 원장(identity, diff_s1..3; results/pdv2_diffattn_contrast_test_20261104)과
+NSD 원장(정제 없음 = ablations/ledgers/test/<seq>/identity.npz, NSD 시드 4~6)을 함께 계산해, old 쪽이
 results/pdv2_review_direction_yaw_20261105/direction_learning/{summary,fixed_city_block_summary}.json의 diff-identity 구간을 재현하는지 확인한다.
 출력: results/pdv2_report_model_20261116/analysis/main/refining_block_summary.json
 """

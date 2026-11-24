@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""보고모델 교체(2026-11-16) 단위 C 항목 6: 같은 오수락 수 비교(시험에서 고른 단일 전역 임계값).
+"""같은 오수락 수 비교(시험 전체 단일 전역 임계값).
 
 scripts/_paper_matched_false_accepts.py의 build·choose·at_tau·independent·draws·replicate_curves를 그대로 쓰고
-NSD 원장만 바꾼다. --nsd old 는 이전 원장으로 /mnt/d/.../pdv2_matched_false_accepts_20261112/result.json의
+NSD 원장만 바꾼다. --nsd old 는 old 꼬리표 원장으로 /mnt/d/.../pdv2_matched_false_accepts_20261112/result.json의
 기준별 값과 구간을 재현하는지 검사한다(결과는 analysis/matched_fa/reproduction_previous_nsd.json).
 BEVPlace++는 원장이 같으므로 기존 값과 같아야 한다(검사).
 

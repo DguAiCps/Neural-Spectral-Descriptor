@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""차이 K/V 입력 변형 1차 탐색(시드 1~3): 차이 입력 계열이 절대 K/V(abskv) 이상이 되는 구성 찾기.
+"""K/V 입력 변형(차이·절대·혼합) 비교 실험(시드 1~3).
 
 학습·검색 경로는 scripts/_report_model_controls_20261116.py(C)의 train / pipe를 그대로 쓰고,
 C의 전역(RUNS·LEDGERS·OUT·VARIANTS·build)만 이 스크립트의 것으로 바꾼다. 데이터 분할·표본·손실 보정·
@@ -16,7 +16,7 @@ C의 전역(RUNS·LEDGERS·OUT·VARIANTS·build)만 이 스크립트의 것으�
   sum_kv     K = tanh(W_k d + W_k2 x_src), V = tanh(W_v d + W_v2 x_src) (W_k2/W_v2 편향 없음, xavier_uniform)
   cat_kv     [d, x_src] -> 새 W_k/W_v 256->128 (편향 없음, xavier_uniform)
   diff_absmag [d, |d|] -> 새 W_k/W_v 256->128
-  difflin_k  (추가) 차이 K에서 tanh 제거(차이 V는 그대로). tanh가 없으면 차이 K와 절대 K는 softmax 뒤 같다.
+  difflin_k  차이 K에서 tanh 제거(차이 V는 그대로)
 새 모듈은 기존 매개변수를 모두 만든 뒤에 만들므로 같은 시드에서 공유 매개변수의 초기값은 sym과 같다.
 W_q·기하 MLP 최종층이 0이라 초기 주의는 균등, 게이트 고정이라 초기 출력은 모든 변형에서 균등 감산과 같다(C.train이 검사).
 

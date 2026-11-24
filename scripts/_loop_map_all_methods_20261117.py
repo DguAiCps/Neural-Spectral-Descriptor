@@ -5,7 +5,7 @@
 실행: 학습 방법은 각 방법의 첫 시드(NSD 시드 4, 비교 방법 시드 1), 학습 없는 방법은 1회.
 동작점: 시퀀스별 R@100P 기준값 = max(음성 점수, 틀린 장소를 돌려준 양성 점수). 양성 = 과거 5 m 안, 음성 = 25 m 밖.
 검산: 수락 수/양성 수를 같은 원장의 pr_sweep R@100P(_report_model_common_20261116.seq_metric)와 대조한다.
-구성은 Codex 시안(results/pdv2_loop_map_20261117/codex/out/make_loop_map.py)의 방향별 색 구분을 따른다.
+순방향·역방향 재방문을 색으로 구분한다.
 출력: results/pdv2_loop_map_20261117/claude/loop_map_all_Town03.{pdf,png}, counts_Town03.json
 """
 import json
@@ -73,7 +73,7 @@ def main(show=ORDER, W=6.9, ncol=6, nrow=2, stem="loop_map_all_Town03"):
 
     plt.rcParams.update({"font.family": "Nimbus Roman", "font.size": 7, "pdf.fonttype": 42, "text.color": INK,
                          "axes.edgecolor": "#B5BAC0", "axes.linewidth": .5})
-    xy = (pos - pos.min(0))[:, ::-1] * np.array([1, -1])  # Codex 단일 열 판과 같은 90° 회전(가로로 긴 배치)
+    xy = (pos - pos.min(0))[:, ::-1] * np.array([1, -1])  # 90° 회전(가로로 긴 배치)
     xy -= xy.min(0)
     span = xy.max(0)
     gap, mx = .035, .04  # 인치: 칸 사이, 칸 안 여백 비율

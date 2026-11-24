@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""보고모델 교체(2026-11-16) 단위 C 항목 10: 게이트 학습 대조(부록용) 표 자료.
+"""게이트 학습 대조 표 자료.
 
 원천(새 학습·추론 없음):
   η 분포   results/pdv2_scratch_search_20261116/server/eta.json (시험46·검증9 전 스캔, 층별)
@@ -9,11 +9,11 @@
 균등 감산 기준은 각 원장과 같은 기기의 uniform(서버 uniform = 로컬 uniform, 일지: 재선택 균등 감산은 서버·로컬 비트 동일).
 출력: results/pdv2_report_model_20261116/analysis/gate/gate_table.json
 
-단위 G 추가(2026-11-17): 게이트 자유 구성 시드 4~6(서버 학습, 로컬 원장·로컬 eta.json)을 주 수치 행으로 넣는다.
+게이트 자유 구성 시드 4~6(서버 학습, 로컬 원장·로컬 eta.json)은 주 수치 행에 넣는다.
   rows_main  시드 4~6 로컬 원장: 보고모델(게이트 고정), 균등 감산, 게이트 자유 구성(LOCAL_ROWS).
              자유−고정(보고모델), 자유−균등 짝지은 구간, η 분포(results/pdv2_scratch_search_20261116/eta.json),
              q+15 접두 검사 요약, 평가 모듈을 거치지 않은 독립 재계산(_pdv2_scratch_search_verify_20261116.metrics)과의 최대 오차.
-  rows       기존 시드 1~3 서버 원장 행(seed_role="구성 탐색 시드"). 내용은 그대로다.
+  rows       시드 1~3 서버 원장 행.
 """
 import json
 import sys

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""보고모델 교체(2026-11-16): 부록 "Observation-bound verification"의 접두 검사 집계(시험46).
+"""부록 "Observation-bound verification"의 접두 검사 집계(시험46).
 
 원고에 실리는 조건의 시험 원장에서 접두(prefix) 검사 기록을 모아 센다. 각 검사는 입력을 처리 시각 t(대칭 창 t=q+15, 무지연 t=q)
 뒤에서 자른 그래프로 같은 질의의 반환 장소와 최종 점수를 다시 계산한 것이다.
 - NSD 시드 4~6: results/pdv2_scratch_search_20261116/ledgers/test/<seq>/<CFG>@s{4,5,6}@u512.json "prefix"(S.pipe)
 - Past-only NSD 시드 4~6, 과거 10 균등 감산: results/pdv2_report_model_20261116/controls/ledgers/test/<seq>/{pastonly@s*@u512,uniform_past10}.json "prefix"
 - 정렬 재점수 제거·시간 증거 제거(시드 4~6): results/pdv2_report_model_20261116/ablations/ledgers/test/<seq>/prefix_s{4,5,6}.json
-- 참고(원고 미포함): 게이트 자유 시드 4~6(x=log__n=ln__lr=1e-3__U=1536@s*@u512), 절대 K/V(원고 제외)
+- 추가 조건: 게이트 자유 시드 4~6(x=log__n=ln__lr=1e-3__U=1536@s*@u512), 절대 K/V
 독립 지표 재계산: 같은 조건(과 균등 감산·정제 없음)의 원장에서 _pr_eval_lib.pr_sweep으로 시퀀스 지표를 다시 계산해 원장 JSON 지표와 비교한다.
 출력: results/pdv2_report_model_20261116/manuscript/prefix_audit.json (호스트 파이썬, numpy만)
 """

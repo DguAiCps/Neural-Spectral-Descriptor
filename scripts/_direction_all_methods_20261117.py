@@ -4,8 +4,8 @@
 규약은 부록 tab:direction(NSD·BEVPlace++)과 같다: _report_model_common_20261116의 seq_metric(방향 양성만 남기고
 공통 음성 유지, 다른 양성은 모호로 제외, 시퀀스별 임계 스윕)·macro(도시 안 평균 → 양성 있는 도시 동일 가중)·
 direction_masks(results/pdv2_review_direction_yaw_20261105/directions). 학습 방법은 시드마다 매크로 → 시드 평균·표본 SD.
-비교 방법 원장은 표2 채택 요약(DEEPRING_SUMMARY, _paper_tables_v24.py)의 source 폴더이며, _pdv2_main_baselines_official.aggregate와
-같이 공통 질의(30 <= q < N-15)로 잘라 쓴다. NSD는 보고모델 새 원장(시드 4·5·6).
+비교 방법 원장은 표2 요약(DEEPRING_SUMMARY, _paper_tables_v24.py)의 source 폴더이며, _pdv2_main_baselines_official.aggregate와
+같이 공통 질의(30 <= q < N-15)로 잘라 쓴다. NSD는 보고모델 원장(시드 4·5·6).
 호스트 CPU: python3 scripts/_direction_all_methods_20261117.py
 """
 import csv

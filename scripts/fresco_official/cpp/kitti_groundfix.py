@@ -10,7 +10,6 @@
 "측정 없음"으로 보므로 KITTI 계열에서는 지면 제거가 사실상 꺼진다. 수정은 1974440 이전 의미 두 가지뿐이다.
   (a) structured_cloud->points.resize(N) 뒤 모든 구조 칸 intensity = -1 (빈 칸 표시)
   (b) 실제 점의 intensity = -1 대입 삭제
-결과 SHA256은 공통46 KITTI 지면 수정 재평가 규약(fresco_common46_kitti_groundfix_v1)의 패치 원천과 같다.
 다른 TU·센서·MATLAB·매칭·상수는 바꾸지 않는다. codec.py의 KITTI intensity 0 대체는 이 수정 뒤에도 무손실이다.
 intensity는 == -1 비교에만 읽히고 KITTI·KITTI-360 원시 intensity는 [0, 1]이기 때문이다.
 """

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""보고모델 교체(2026-11-16) 단위 C 항목 1·2·3·7: 주 결과 NSD 행, 짝지은 구간, 도시별·데이터셋별, 학습 기여, 방향별.
+"""주 결과 NSD 행, 짝지은 구간, 도시별·데이터셋별, 학습 기여, 방향별.
 
-먼저 같은 함수로 이전 NSD 원장을 넣어 기존 발표 원천(summary.json·integrated_report.json·direction_summary.json·
-direction_learning/sequence_summary.json·dataset_methods_summary.json)을 재현하고, 그다음 새 원장을 넣는다.
+먼저 같은 함수로 old 꼬리표 원장을 넣어 원천(summary.json·integrated_report.json·direction_summary.json·
+direction_learning/sequence_summary.json·dataset_methods_summary.json)을 재현해 계산 경로를 확인하고,
+그다음 new 꼬리표 원장(NSD 시드 4·5·6)으로 계산한다.
 
 출력(results/pdv2_report_model_20261116/analysis/main/):
   summary.json             기존 results/pdv2_diffattn_contrast_test_20261104/summary.json의 per_case/mean/std 스키마

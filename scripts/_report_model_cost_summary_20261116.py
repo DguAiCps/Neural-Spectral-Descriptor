@@ -13,7 +13,7 @@ import _report_model_cost_20261116 as R  # noqa: E402
 
 O, bench, OUT, ROOT, TAG, CHECKPOINT = R.O, R.bench, R.OUT, R.ROOT, R.TAG, R.CHECKPOINT
 
-# 원고 주 결과표(body_v2.4 tables_v3/table2_results.tex)의 비교 방법 비용(KB/frame, 갱신, 질의, 전체 ms). 순위 확인용.
+# 주 결과표의 비교 방법 비용(KB/frame, 갱신, 질의, 전체 ms). 순위 확인용.
 OTHERS = {"SC++": (31.43, 14.81, 26.47, 41.28), "FreSCo": (20.29, 10.83, 29.70, 40.54), "RING": (115.72, 7.07, 26.45, 33.52),
           "RING++": (694.33, 60.31, 141.58, 201.88), "DiSCO": (11.42, 3.33, 1.22, 4.56), "DeepRING": (118.89, 9.64, 25.95, 35.59),
           "RING#-L": (278.40, 51.54, 142.56, 194.10), "HeLiOS": (36.63, 326.57, 10.13, 336.70), "SeqOT": (6.70, 6.69, 0.12, 6.81),

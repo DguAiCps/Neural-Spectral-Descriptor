@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""새 보고모델(처음부터 한 단계 학습) 구성의 두 학습 대조: Past-only NSD(무지연, 과거 10)와 절대 K/V attention.
+"""NSD(처음부터 한 단계 학습) 구성의 두 학습 대조: Past-only NSD(무지연, 과거 10)와 절대 K/V attention.
 
-새 보고모델 = scripts/_pdv2_scratch_search_20261116.py(S)의 CFG "x=log__n=ln__g=frozen__lr=1e-3__U=1536" @512갱신,
+NSD 구성 = scripts/_pdv2_scratch_search_20261116.py(S)의 CFG "x=log__n=ln__g=frozen__lr=1e-3__U=1536" @512갱신,
 고정 설정 P.selected() = 융합 (2,1,2,2), lambda=0.25. 학습·검색 경로는 S.train / S.pipe를 그대로 옮기고 다음만 바꾼다.
 
-- variant "sym"     : 새 NSD 자체(재현 검사용). 학습 그래프·표본·보정 모두 S와 같다.
+- variant "sym"     : NSD 자체(재현 검사용). 학습 그래프·표본·보정 모두 S와 같다.
 - variant "pastonly": 정제 이웃과 수락의 시간 증거를 앞선 10키프레임으로 제한(지연 0, 질의 q=t).
     그래프·plan 변환은 scripts/_pdv2_zero_lag_p10.py의 to_p10 / p10_neighbor_plans를 그대로 옮겼다
     (간선 (i-d -> i), d=1..10, 전달 칸 (오프셋+5) mod 11, 질의 쪽 오프셋 -10..-1, 후보 쪽 거리 대응 반경 20).

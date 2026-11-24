@@ -106,8 +106,7 @@ Neither method uses learned weights. Our evaluation-set generator and NCLT loade
     return changes
 
 
-# 부록 과잉 서술 정리(2026-11-20): 원고에서 손으로 고친 문구를 조각 생성에 반영한다. (조각, 원문, 바꾼 문구)이며
-# 원문은 조각 안에 한 번만 있어야 한다. 수치는 바꾸지 않는다.
+# 조각에 적용할 (조각, 원문, 바꾼 문구) 목록이며 원문은 조각 안에 한 번만 있어야 한다. 수치는 바꾸지 않는다.
 DISCLOSURE_CLEANUP_20261120 = (
     ('common_task', r"support a shared loop-detection comparison, but are not equivalent to each paper's original task and need not affect methods equally",
      r"define a shared loop-detection comparison that differs from each paper's original task"),
@@ -167,7 +166,7 @@ Two bounded four-epoch SeqOT pilots, a degenerate-overlap guard and KITTI/HeLiPR
      r"targets"),
     ('scpp_height', r"\%; the table keeps the sensor-specific offsets. These macro differences are within 0.15 points, whereas R@100P of individual sequences changes by $-7.44$ to $+12.38$ points, and we computed no significance test or interval across sequences",
      r"\%, within 0.15 points"),
-    # 2026-11-21: 원고에서 다시 손으로 고친 문구(용어 "official"/"public"→"released", "Scan Context++"→"SC++", 문단 교체·문장 추가).
+    # 용어 통일("official"/"public"→"released", "Scan Context++"→"SC++"), 문단 교체·문장 추가.
     ('common_task', r"""\paragraph{Common-task adaptations.}
 Geographically disjoint retraining, KISS-ICP keyframes, past candidates, and the shared 5\,m correctness rule define the common task. """,
      r"""\paragraph{Common-evaluation adaptations.}
@@ -219,7 +218,7 @@ The released SC++ PC"""),
     ('disco_protocol', r"the first public sampler's list", r"the first released sampler's list"),
     ('seqot_distance_labels', r"the author checkpoint attains", r"the released checkpoint attains"),
     ('bevplace_protocol', r"evaluated with the official inference", r"evaluated with the released inference"),
-    # 2026-11-21: 발표 수치 대조표를 한 단 폭으로 줄이고(행·수치 유지) 겹치거나 과잉인 구절을 지운다.
+    # 발표 수치 대조표를 한 단 폭으로 줄이고(행·수치 유지) 겹치거나 과잉인 구절을 지운다.
     ('published_overview', r"""\begin{table*}[t]
 \centering\small\setlength{\tabcolsep}{5pt}""",
      r"""\begin{table}[t]
@@ -237,7 +236,7 @@ The released SC++ PC"""),
      'computed from point geometry only, without poses or labels.'),
     ('learned_direction', ' at the selected epoch (1,460 to 364 of 2,854 queries)',
      ' (1,460 to 364 of 2,854 queries)'),
-    # 2026-11-21: 발표 수치 대조표에 SC++·FreSCo·RING#-L·BEVPlace++ 행을 넣고(문단 순서) 표와 겹치는 수치 문장을 줄인다. 관측 범위·빈 배치 처리 문구를 구체화한다.
+    # 발표 수치 대조표에 SC++·FreSCo·RING#-L·BEVPlace++ 행을 넣고(문단 순서) 표와 겹치는 수치 문장을 줄인다. 관측 범위·빈 배치 처리 문구를 구체화한다.
     ('published_overview',
      'HeLiOS & Aeva / Narrow & R@1 & 80.60 & 80.56 & -0.04 \\\\\nHeLiOS & Aeva / Narrow & R@5 & 88.50 & 88.44 & -0.06 \\\\\nHeLiOS & Aeva / Wide & R@1 & 84.90 & 84.90 & 0.00 \\\\\nHeLiOS & Aeva / Wide & R@5 & 94.00 & 93.99 & -0.01 \\\\\nHeLiOS & Ouster / Narrow & R@1 & 70.00 & 69.96 & -0.04 \\\\\nHeLiOS & Ouster / Narrow & R@5 & 85.20 & 85.14 & -0.06 \\\\\nHeLiOS & Ouster / Wide & R@1 & 91.20 & 91.23 & +0.03 \\\\\nHeLiOS & Ouster / Wide & R@5 & 94.60 & 94.60 & 0.00 \\\\\n\\midrule\nSeqOT & NCLT Jan08--Feb05 & R@1 & 91.70 & 92.17 & +0.47 \\\\\nSeqOT & NCLT Jan08--Feb05 & R@5 & 94.70 & 94.88 & +0.18 \\\\\nSeqOT & NCLT Jan08--Feb05 & R@20 & 96.80 & 96.91 & +0.11 \\\\\n\\midrule\nDiSCO & NCLT 30 pairs / 1.5 m & R@1 & 89.08 & 82.05 & -7.03 \\\\\nDiSCO & NCLT 30 pairs / 1.5 m & R@1\\% & 99.14 & 97.29 & -1.85 \\\\\n\\midrule\nRING & NCLT full / 10 m & R@1 & 70.98 & 62.52 & -8.46 \\\\\n\\midrule\nRING++ & NCLT full / 10 m & R@1 & 73.21 & 55.60 & -17.61 \\\\\n',
      'SC++ (PC) & KITTI 00 & PR-AUC & 84 & 88.6 & $+$4.6 \\\\\nSC++ (CC) & KITTI 00 & PR-AUC & 80 & 82.0 & $+$2.0 \\\\\nSC++ (PC) & KITTI 08 & PR-AUC & 55 & 54.5 & $-$0.5 \\\\\nSC++ (CC) & KITTI 08 & PR-AUC & 0 & 0.5 & $+$0.5 \\\\\nSC++ (PC) & KAIST03 & PR-AUC & 99 & 99.3 & $+$0.3 \\\\\nSC++ (CC) & KAIST03 & PR-AUC & 99 & 99.1 & $+$0.1 \\\\\nSC++ (PC) & Riverside02 & PR-AUC & 72 & 77.3 & $+$5.3 \\\\\nSC++ (CC) & Riverside02 & PR-AUC & 88 & 92.4 & $+$4.4 \\\\\n\\midrule\nFreSCo & KITTI 08 & Max F1 & 85.9 & 86.1 & $+$0.2 \\\\\nFreSCo & KAIST03 & Max F1 & 98.7 & 98.5 & $-$0.2 \\\\\n\\midrule\nRING & NCLT full / 10 m & R@1 & 70.98 & 62.52 & $-$8.46 \\\\\n\\midrule\nRING++ & NCLT full / 10 m & R@1 & 73.21 & 55.60 & $-$17.61 \\\\\n\\midrule\nRING\\#-L & NCLT Protocol 1 & R@1 & 85 & 80.5 & $-$4.5 \\\\\nRING\\#-L & NCLT Protocol 1 & Max F1 & 87 & 84.5 & $-$2.5 \\\\\nRING\\#-L & NCLT Protocol 1 & PR-AUC & 91 & 85.2 & $-$5.8 \\\\\n\\midrule\nDiSCO & NCLT 30 pairs / 1.5 m & R@1 & 89.08 & 82.05 & $-$7.03 \\\\\nDiSCO & NCLT 30 pairs / 1.5 m & R@1\\% & 99.14 & 97.29 & $-$1.85 \\\\\n\\midrule\nHeLiOS & Aeva / Narrow & R@1 & 80.60 & 80.56 & $-$0.04 \\\\\nHeLiOS & Aeva / Narrow & R@5 & 88.50 & 88.44 & $-$0.06 \\\\\nHeLiOS & Aeva / Wide & R@1 & 84.90 & 84.90 & 0.00 \\\\\nHeLiOS & Aeva / Wide & R@5 & 94.00 & 93.99 & $-$0.01 \\\\\nHeLiOS & Ouster / Narrow & R@1 & 70.00 & 69.96 & $-$0.04 \\\\\nHeLiOS & Ouster / Narrow & R@5 & 85.20 & 85.14 & $-$0.06 \\\\\nHeLiOS & Ouster / Wide & R@1 & 91.20 & 91.23 & $+$0.03 \\\\\nHeLiOS & Ouster / Wide & R@5 & 94.60 & 94.60 & 0.00 \\\\\n\\midrule\nSeqOT & NCLT Jan08--Feb05 & R@1 & 91.70 & 92.17 & $+$0.47 \\\\\nSeqOT & NCLT Jan08--Feb05 & R@5 & 94.70 & 94.88 & $+$0.18 \\\\\nSeqOT & NCLT Jan08--Feb05 & R@20 & 96.80 & 96.91 & $+$0.11 \\\\\n\\midrule\nBEVPlace++ & KITTI 00 & R@1 & 100.0 & 99.85 & $-$0.15 \\\\\nBEVPlace++ & KITTI 02 & R@1 & 99.3 & 99.35 & $+$0.05 \\\\\nBEVPlace++ & KITTI 05 & R@1 & 100.0 & 98.20 & $-$1.80 \\\\\nBEVPlace++ & KITTI 06 & R@1 & 100.0 & 100.00 & 0.00 \\\\\nBEVPlace++ & KITTI 08 & R@1 & 99.1 & 99.41 & $+$0.31 \\\\\n'),
@@ -268,7 +267,7 @@ The released SC++ PC"""),
     ('bevplace_protocol',
      'The released BEVPlace++ KITTI checkpoint, evaluated with the released inference and evaluation functions and 5\\,m labels, gives R@1 of 99.85/99.35/98.20/100.00/99.41\\% on KITTI 00/02/05/06/08, compared with the published 100.0/99.3/100.0/100.0/99.1\\%. These values equal',
      'We evaluate the released BEVPlace++ KITTI checkpoint with the released inference and evaluation functions and 5\\,m labels on KITTI 00/02/05/06/08 (Table~\\ref{tab:published_number_check}). Its R@1 values equal'),
-    # 2026-11-22: J절 문단 제목을 방법 이름으로 통일하고, 원 논문 수치 대조(J.3)는 표를 가리키는 짧은 문단으로 줄인다.
+    # J절 문단 제목을 방법 이름으로 통일하고, 원 논문 수치 대조(J.3)는 표를 가리키는 짧은 문단으로 줄인다.
     ('published_overview', "Table~\\ref{tab:published_number_check} compares published values with our released-checkpoint or released-code runs under each paper's evaluation setting as reproduced from the released code and data described below. Checkpoints trained under each paper's protocol are used for reproduction checks.",
      "Table~\\ref{tab:published_number_check} compares published values with our runs of the released code or checkpoints under each paper's own evaluation setting."),
     ('scpp_protocol', "\\paragraph{SC++ released code.}\nWe run the released SC++ PC and CC implementations with the paper's 8\\,m criterion; Table~\\ref{tab:published_number_check} lists the areas under the precision--recall curve (PR-AUC). On all 4,541 KITTI 00 scans, this evaluation has 889 positive queries, and the paper reports 852. With the released equidistant keyframe selector and the evaluator's revisit rule, MulRan KAIST03 has 4,224 nodes and 2,055 revisits, and Riverside02 has 4,870 and 2,174, equal to the paper's counts.\n\n\\paragraph{All-frame released-code check.}\nRunning the released PC and CC functions once on all 4,071 KITTI 08 frames, with the evaluator's 49-frame exclusion and the 8\\,m criterion, gives 4,022 queries and 422 revisits. Published SC++ values and definitions are those of its journal version (Tables III, VIII, and IX).",

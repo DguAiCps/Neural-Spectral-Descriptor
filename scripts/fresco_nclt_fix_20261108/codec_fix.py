@@ -1,6 +1,6 @@
-"""NCLT 좌표 적응 수정 가족 nclt_flu_hdl32_inverted의 공식 입력 바이트와 무손실 전송 페이로드 (2026-11-08).
+"""NCLT FLU 좌표 적응 가족 nclt_flu_hdl32_inverted의 공식 입력 바이트와 무손실 전송 페이로드.
 
-기존 codec.py(가족 nclt_oxford_hdl32, G3)는 바꾸지 않는다. NCLT가 아닌 가족은 기존 codec에 그대로 맡긴다.
+NCLT가 아닌 가족은 codec.py에 그대로 맡긴다.
 
 1차 자료(nclt.pdf p6 §2.1a, p8 §3·표4, p15-16 §7.3):
   velodyne_sync 점 = Segway body 좌표 FRD(x 앞, y 오른쪽, z 아래), 원점 = 바퀴 축 중심, u16*0.005-100 m.
@@ -12,7 +12,7 @@
 공식 입력 바이트 = Oxford 선택기 파일 배치(x 전부, y 전부, z 전부, i 전부)의 (-x', y', -z', 0).
 드라이버(cpp/fresco_prep_ncltflu.cpp)가 무수정 공식 Oxford extractPointCloud로 읽으면 x=-x, z=-z 뒤 점 = (x', y', z')이고,
 row만 공식과 같은 float 식에 오프셋 30.67로 다시 계산한다(spec allowed_code_diff I2).
-페이로드(zlib level 1) = 원시 u16 x,y,z 그대로(기존 G3와 같은 무손실 페이로드). receiver가 같은 float32 식으로
+페이로드(zlib level 1) = 원시 u16 x,y,z 그대로(codec.py와 같은 무손실 페이로드). receiver가 같은 float32 식으로
 공식 입력 바이트를 다시 만들고 sha256을 대조한다.
 """
 from __future__ import annotations

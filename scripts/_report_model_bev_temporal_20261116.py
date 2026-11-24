@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""보고모델 교체(2026-11-16) 단위 C 항목 8: BEVPlace++ + 같은 시간 증거(TE) 대조의 NSD 행과 짝지은 구간.
+"""BEVPlace++ + 같은 시간 증거(TE) 대조의 NSD 행과 짝지은 구간.
 
 _pdv2_bev_temporal_highprec.py와 같은 원장·지표(AP·최대F1·R@95P·R@99P·R@100P·R@1)·구간 절차(도시 안 양성 시퀀스
 복원추출 10,000회, seed 20261104). BEVPlace++·BEVPlace++ + TE 원장(results/pdv2_review_response_20261104/bev/test)은
 BEVPlace++ 서술자와 고정 시간 증거 규칙(β=11/15, λ=0.25 원래 함수)만 쓰므로 NSD 모델과 무관하다.
-먼저 이전 NSD 원장으로 results/pdv2_bev_temporal_highprec_20261115/highprec.json을 재현한다.
+먼저 old 꼬리표 원장(results/pdv2_diffattn_contrast_test_20261104)으로 results/pdv2_bev_temporal_highprec_20261115/highprec.json을
+재현해 계산 경로를 확인한다.
 출력: results/pdv2_report_model_20261116/analysis/bev_temporal/highprec.json (같은 스키마)
 """
 import json

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""질의 분할 4조각(A2 Q1·Q2, A3 측방 작음, A6a 회전 상위 20%)의 견고성 확인(2026-11-18). 원장만 읽는 CPU 분석.
+"""질의 속성별 비교의 시드·도시·시퀀스 견고성 확인(2026-11-18). 원장만 읽는 CPU 분석.
 
   python3 scripts/_kveval_split_robustness_20261118.py
 출력: results/kv_eval_conditions_20261118/query_splits_robustness/summary.json
@@ -26,7 +26,6 @@
   검증 감사 폴더(results/pdv2_diffattn_contrast_pipeline_20261104/val)를 가리키는 심볼릭 링크를 만들고 C.SEARCH·C.OLD를
   잠시 그쪽으로 돌린다(파일 복사 없음, 끝나면 링크 삭제). 경계는 시험 풀에서 정한 절대값 0.3757·0.7055·0.4967 m를 그대로,
   회전은 검증 시퀀스 안 상위 20%.
-  주의: NSD 구성(CFG·갱신 수)은 검증9로 골랐으므로 검증 비교는 NSD 쪽에 선택 이득이 있을 수 있다.
 시드별 값: 시드 k의 (NSD 매크로 − abskv 매크로), 짝은 위와 같음(시드 1~3 = sweep1 sym/abskv, 시드 4~6 = new/controls abskv).
 도시별: 묶음 안 시퀀스 평균의 (NSD 시드 평균 − abs 시드 평균). leave-one-city-out = 나머지 5도시 동일 가중 평균.
   leave-one-sequence-out = 시퀀스 하나를 뺀 6도시 매크로(시퀀스 영향 확인).

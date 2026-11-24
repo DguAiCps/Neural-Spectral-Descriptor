@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""보고모델 교체(2026-11-16) 단위 C 항목 9: 진행 방향 차이별 수락 비율(fig_heading_acceptance 후보).
+"""진행 방향 차이별 수락 비율 그림(fig_heading_acceptance).
 
 scripts/_paper_heading_figure_v23.py(작업 트리 판)의 계산·그림을 그대로 옮기고, NSD와 Past-only NSD 원장 위치만 인자로 받는다.
-비교 방법 10종은 같은 채택 요약 원장을 그대로 읽는다. 각도·질의 집합은 이전 NSD 시험 폴더의 캐시 기준(같은 질의).
+비교 방법 10종은 같은 채택 요약 원장을 그대로 읽는다. 각도·질의 집합은 old 꼬리표 NSD 시험 폴더의 캐시 기준(같은 질의).
 
-python3 scripts/_report_model_heading_20261116.py --nsd old --past old      # 기존 발표 수치 재현 검사
+python3 scripts/_report_model_heading_20261116.py --nsd old --past old      # old 꼬리표 원장 재현 검사
 python3 scripts/_report_model_heading_20261116.py --nsd new [--past DIR --past-pattern 'NAME@s{seed}.npz' --past-seeds 4,5,6]
   --past 를 주지 않으면 Past-only 곡선 없이 NSD·비교 방법만 계산·그린다(그림은 만들되 이름에 _nsd_only).
 출력: results/pdv2_report_model_20261116/analysis/heading/heading_acceptance[_<tag>].json, analysis/figures/fig_heading_acceptance[...].{pdf,png}

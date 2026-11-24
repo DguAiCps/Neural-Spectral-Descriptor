@@ -41,7 +41,7 @@ CRITERIA = tuple([(f"FA<={k}", "budget", k) for k in BUDGETS] +
 FIXED_POINTS = ("P99", "P100", "F1")
 B, BOOT_SEED, CHUNK = 10000, 20261104, 50
 SEQS = [f"{s}/{q}" for s, q in TEST]
-# 지시문에 적힌 임시 계산값(검증 안 됨, 세 시작점 평균 TP). 일치 여부만 본다.
+# 참고용 기대값(세 시작점 평균 TP). 일치 여부만 본다.
 PROVISIONAL_TP = {"nsd": {0: 7107, 5: 10105, 10: 14954, 30: 21478, 100: 24547},
                   "bevplace": {0: 6049, 5: 8906, 10: 10931, 30: 15919, 100: 20335}}
 BUILT: dict = {}     # 재표집 작업자가 fork로 물려받는다: (method, seed) -> 곡선

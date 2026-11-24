@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""보고모델 교체(2026-11-16) 단위 C 항목 3: 학습 기여 그림 후보(fig_learning_gain.pdf).
+"""학습 기여 그림(fig_learning_gain.pdf).
 
-추천안(ii): NSD(시드 4·5·6) − 균등 감산의 짝지은 차이를 지표 4개 × 부분집합 3개(전체·순방향 전용·역방향 전용)로 보이는 forest plot.
+NSD(시드 4·5·6) − 균등 감산의 짝지은 차이를 지표 4개 × 부분집합 3개(전체·순방향 전용·역방향 전용)로 보이는 forest plot.
 점: 세 학습 시드의 평균 차이, 막대: 모델 고정·도시 안 시퀀스 재표집 95% 구간(10,000회), 작은 표식: 시드별 차이.
 원천: results/pdv2_report_model_20261116/analysis/main/{direction_summary,direction_sequence_summary}.json
 (_report_model_main_tables_20261116.py 산출). 양식(글꼴·색·폭)은 기존 _paper_learning_figure_v23.py와 맞춘다.

@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""새 보고모델(처음부터 한 단계 학습, 시드 4·5·6, 고정 설정 융합 (2,1,2,2)·λ=0.25)의 추론 절제를 다시 계산한다.
+"""NSD(처음부터 한 단계 학습, 시드 4·5·6, 고정 설정 융합 (2,1,2,2)·λ=0.25)의 추론 절제를 계산한다.
 
 검색·점수 경로는 scripts/_pdv2_scratch_search_20261116.py의 pipe()와 같다(재선택 융합으로 다시 계산한 후보 정적 점수,
 pipeline.winners, prior.base.prior.plan, P.score(z, plan, λ)). 조건 정의는 기존 절제 스크립트를 따른다.
 
 - 색인 예산(scripts/_pdv2_contrast_index_budget.py): 원키 top-200, BEV top-200, 이중 top-100+100(NSD), 원키 top-K_q, BEV top-K_q.
-  후보 집합은 원키·BEV 크기 색인만으로 정해져 모델·융합과 무관하다. 승자는 각 후보 집합에서 네 융합 채널(새 융합)로 고른다.
+  후보 집합은 원키·BEV 크기 색인만으로 정해져 모델·융합과 무관하다. 승자는 각 후보 집합에서 네 융합 채널(융합 (2,1,2,2))로 고른다.
   정적 부분합의 float32 변환 위치는 pipeline.winners와 같게 두어 이중 색인 조건이 NSD 승자와 비트 단위로 같게 했다.
-- 거시 대조(scripts/_pdv2_macro_ablation.py): no_alignment(두 색인 코사인 부분합 최대로 반환, 새 융합), no_temporal(NSD 승자, 중심 쌍만으로 수락).
+- 거시 대조(scripts/_pdv2_macro_ablation.py): no_alignment(두 색인 코사인 부분합 최대로 반환, 융합 (2,1,2,2)), no_temporal(NSD 승자, 중심 쌍만으로 수락).
 - 정제 없음(identity): z = 원래 복소 DFT 특징, 정렬 뱅크 = 입력 뱅크(pipeline.worker의 identity와 같음).
 - 시간 창 방향(scripts/_pdv2_window_side_control.py): 균등 감산의 전달 칸을 과거 5개(칸 0~4)나 미래 5개(칸 6~10)로 줄인다.
   세기는 검증9 파이프라인 집계 AP 최대(동률이면 약한 세기)로 {-0.125,-0.25,-0.5,-1}에서 고른다.
 - 무지연 정제 없음(scripts/_pdv2_zero_lag.py의 zl_identity): identity 승자, 수락의 질의 쪽 미래 오프셋 +1~+5를 없는 이웃으로 둔 plan.
 
-재현 검사: 같은 경로로 NSD 시드 4~6 원장과 uniform 원장(S 원장)을 승자·점수 비트 단위로 재현한다. 옛 설정(융합 (1,1,2,1),
-옛 후보 정적 점수)에서 기존 identity·zl_identity·past_0p5·future_0p25 원장도 재현해 조건 구현을 확인한다.
+재현 검사: 같은 경로로 NSD 시드 4~6 원장과 uniform 원장(S 원장)을 승자·점수 비트 단위로 재현한다. 융합 (1,1,2,1)
+설정(그 설정의 후보 정적 점수)에서도 identity·zl_identity·past_0p5·future_0p25 원장을 재현해 조건 구현을 확인한다.
 
 docker exec -w /workspace/Neural-Spectral-Codec ring_baseline python3 scripts/_report_model_ablations_20261116.py <action>
   worker --role test|val --sequence S --groups core,window_equal | window_selected | window_val

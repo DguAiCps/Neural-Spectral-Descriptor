@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Clipped-BEV auxiliary spectrum caches (fix A, 2026-10-10).
+"""Clipped-BEV auxiliary spectrum caches.
 
 The NSD auxiliary block is the 16x12 phase sketch of the max-height BEV grid
 (scripts/_pd_build_val_spec_caches.spec_for_points). Cells that hold only
 returns below the sensor keep negative heights there. Here the grid is
-clipped at zero first, as the height-polar grid of NSD-H already does
-(docs/RAW/실험일지/2026-10-10_karlsruhe_diagnosis.md):
+clipped at zero first, as the height-polar grid of NSD-H already does:
 
     sk = phase_sketch(pool_rows(max(0, BEV), 16), 12)
 

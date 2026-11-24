@@ -4,8 +4,8 @@ scripts/_paper_temporal_tables_v23.py에서 출발했다. v2.3은 원고 문장�
 문장에 없는 절대값은 대시로 두었다. v2.4는 결과 JSON에 모든 절대값과 짝지은 구간이 있으므로 build()가 결과 JSON에서
 temporal_source.json(schema 2)을 다시 쓰고, generate()가 그 파일만 읽어 표를 만든다.
 
-남기는 행(사용자 결정 2026-11-16): 학습 없는 균등 감산 대조(대칭, 앞 5·뒤 5의 같은 세기/선택 세기, 정제 없음+양방향 수락),
-대칭 NSD, Past-only NSD(과거 10), 과거 10 균등 감산, 정제 없음+과거 5 수락. 사전학습 기반 학습 변형은 모두 뺀다.
+표의 행: 학습 없는 균등 감산 대조(대칭, 앞 5·뒤 5의 같은 세기/선택 세기, 정제 없음+양방향 수락),
+대칭 NSD, Past-only NSD(과거 10), 과거 10 균등 감산, 정제 없음+과거 5 수락.
 narratives(원고 문단)는 기존 temporal_source.json의 것을 옮기고, 원고에서 고친 문장(NARRATIVE_FIXES)만 적용한다.
 """
 from pathlib import Path

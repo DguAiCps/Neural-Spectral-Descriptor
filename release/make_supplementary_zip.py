@@ -7,7 +7,7 @@
     supplementary.pdf
     code/README.md, code/nsd/, code/tools/, code/assets/   (release/cvpr2027_code/ 에서, verify/·__pycache__ 제외)
 
-OpenReview 조건: ZIP 또는 PDF 한 개, 200 MB 이하, 부록 마감까지 교체 가능.
+OpenReview 조건: ZIP 또는 PDF 한 개, 200 MB 이하.
 묶기 전에 검사하고 하나라도 걸리면 ZIP을 만들지 않는다:
   * 코드·README·가중치 피클 안의 신원/경로/내부 이름 문자열, 한국어
   * PDF 저자 메타데이터, 첨부 파일, 내장되지 않은 글꼴, 본문 글자와 링크 주석(/URI)의 URL

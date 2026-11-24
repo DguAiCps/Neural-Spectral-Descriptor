@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""차이 K/V 입력 2차 탐색(H5, 시드 1~3): 학습 조건을 바꾸면 차이 계열과 절대 K/V(abskv)의 순위가 바뀌는지.
+"""학습 조건별 K/V 입력 변형 비교(시드 1~3).
 
 변형(1차 스크립트 scripts/_kvdiff_variants_20261118.py = V의 구현 그대로): sym, abskv, diffk_absv, sum_kv.
 학습 조건(조건마다 네 변형 모두, 모두 로컬 GPU에서 다시 학습):
